@@ -25,7 +25,7 @@ import type {
   SyncIdentity,
   KeyBundlePayload,
 } from "../types";
-import { SyncError, SyncErrorCodes, INITIAL_SYNC_STATE } from "../types";
+import { SyncError, SyncErrorCodes, INITIAL_SYNC_STATE, SyncStates } from "../types";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // State Management
@@ -43,6 +43,13 @@ type SyncAction =
       trustedDevices: TrustedDeviceSummary[];
     }
   | { type: "DETECT_ERROR"; error: SyncError }
+  | { type: "BOOTSTRAP_START" }
+  | { type: "BOOTSTRAP_SUCCESS"; message: string; snapshotId: string | null }
+  | { type: "BOOTSTRAP_ERROR"; error: SyncError }
+  | {
+      type: "ENGINE_STATUS";
+      status: SyncState["engineStatus"];
+    }
 
   // Operations
   | { type: "OPERATION_START" }
@@ -79,6 +86,10 @@ function syncReducer(state: SyncState, action: SyncAction): SyncState {
         ...state,
         isDetecting: false,
         syncState: action.syncState,
+        bootstrapStatus: action.syncState === "READY" ? state.bootstrapStatus : "idle",
+        bootstrapMessage: action.syncState === "READY" ? state.bootstrapMessage : null,
+        bootstrapSnapshotId: action.syncState === "READY" ? state.bootstrapSnapshotId : null,
+        engineStatus: action.syncState === "READY" ? state.engineStatus : null,
         identity: action.identity,
         device: action.device,
         serverKeyVersion: action.serverKeyVersion,
@@ -87,6 +98,34 @@ function syncReducer(state: SyncState, action: SyncAction): SyncState {
 
     case "DETECT_ERROR":
       return { ...state, isDetecting: false, error: action.error };
+
+    case "BOOTSTRAP_START":
+      return {
+        ...state,
+        bootstrapStatus: "running",
+        bootstrapMessage: null,
+      };
+
+    case "BOOTSTRAP_SUCCESS":
+      return {
+        ...state,
+        bootstrapStatus: "success",
+        bootstrapMessage: action.message,
+        bootstrapSnapshotId: action.snapshotId,
+      };
+
+    case "BOOTSTRAP_ERROR":
+      return {
+        ...state,
+        bootstrapStatus: "error",
+        bootstrapMessage: action.error.message,
+      };
+
+    case "ENGINE_STATUS":
+      return {
+        ...state,
+        engineStatus: action.status,
+      };
 
     case "OPERATION_START":
       return { ...state, isLoading: true, error: null };
@@ -227,6 +266,7 @@ const DeviceSyncContext = createContext<SyncContextValue | null>(null);
 export function DeviceSyncProvider({ children }: { children: ReactNode }) {
   const { isConnected, isEnabled, userInfo } = useWealthfolioConnect();
   const [state, dispatch] = useReducer(syncReducer, INITIAL_SYNC_STATE);
+  const bootstrapDeviceRef = useRef<string | null>(null);
 
   // Check if user has a subscription (team)
   const hasSubscription = !!userInfo?.team?.plan;
@@ -278,6 +318,60 @@ export function DeviceSyncProvider({ children }: { children: ReactNode }) {
     };
   }, [isConnected, isEnabled, hasSubscription]);
 
+  useEffect(() => {
+    if (state.syncState !== SyncStates.READY) {
+      bootstrapDeviceRef.current = null;
+      return;
+    }
+
+    const deviceId = state.identity?.deviceId ?? state.device?.id ?? null;
+    if (!deviceId) return;
+    if (bootstrapDeviceRef.current === deviceId) return;
+
+    bootstrapDeviceRef.current = deviceId;
+    let cancelled = false;
+
+    async function bootstrapSnapshot() {
+      dispatch({ type: "BOOTSTRAP_START" });
+      try {
+        const result = await syncService.bootstrapSnapshotIfNeeded();
+        if (cancelled) return;
+
+        dispatch({
+          type: "BOOTSTRAP_SUCCESS",
+          message: result.message,
+          snapshotId: result.snapshotId,
+        });
+
+        if (result.status === "applied") {
+          // Trigger first incremental cycle immediately after snapshot restore.
+          try {
+            await syncService.triggerSyncCycle();
+          } catch (cycleError) {
+            console.warn("[DeviceSyncProvider] Initial sync cycle after bootstrap failed", cycleError);
+          }
+        }
+
+        const engineStatus = await syncService.getEngineStatus().catch(() => null);
+        if (!cancelled && engineStatus) {
+          dispatch({ type: "ENGINE_STATUS", status: engineStatus });
+        }
+      } catch (err) {
+        if (cancelled) return;
+        dispatch({
+          type: "BOOTSTRAP_ERROR",
+          error: SyncError.from(err, SyncErrorCodes.INIT_FAILED),
+        });
+      }
+    }
+
+    void bootstrapSnapshot();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [state.syncState, state.identity?.deviceId, state.device?.id]);
+
   // Actions
   const refreshState = useCallback(async () => {
     dispatch({ type: "DETECT_START" });
@@ -291,6 +385,12 @@ export function DeviceSyncProvider({ children }: { children: ReactNode }) {
         serverKeyVersion: result.serverKeyVersion,
         trustedDevices: result.trustedDevices,
       });
+      if (result.state === SyncStates.READY) {
+        const engineStatus = await syncService.getEngineStatus().catch(() => null);
+        if (engineStatus) {
+          dispatch({ type: "ENGINE_STATUS", status: engineStatus });
+        }
+      }
     } catch (err) {
       dispatch({
         type: "DETECT_ERROR",

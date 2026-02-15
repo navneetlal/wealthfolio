@@ -98,6 +98,57 @@ pub struct SyncSessionStatus {
     pub is_configured: bool,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeviceSyncEngineStatusResponse {
+    cursor: i64,
+    last_push_at: Option<String>,
+    last_pull_at: Option<String>,
+    last_error: Option<String>,
+    consecutive_failures: i32,
+    next_retry_at: Option<String>,
+    last_cycle_status: Option<String>,
+    last_cycle_duration_ms: Option<i64>,
+    background_running: bool,
+    bootstrap_required: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeviceSyncBootstrapResponse {
+    status: String,
+    message: String,
+    snapshot_id: Option<String>,
+    cursor: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeviceSyncCycleResponse {
+    status: String,
+    lock_version: i64,
+    pushed_count: usize,
+    pulled_count: usize,
+    cursor: i64,
+    needs_bootstrap: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeviceSyncBackgroundResponse {
+    status: String,
+    message: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeviceSyncSnapshotUploadResponse {
+    status: String,
+    snapshot_id: Option<String>,
+    oplog_seq: Option<i64>,
+    message: String,
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // EventBus Progress Reporter
 // ─────────────────────────────────────────────────────────────────────────────
@@ -772,6 +823,74 @@ async fn reinitialize_device_sync(
     Ok(Json(result))
 }
 
+/// Web runtime stub for device sync engine status (desktop engine owns authoritative state).
+async fn get_device_sync_engine_status() -> ApiResult<Json<DeviceSyncEngineStatusResponse>> {
+    Ok(Json(DeviceSyncEngineStatusResponse {
+        cursor: 0,
+        last_push_at: None,
+        last_pull_at: None,
+        last_error: None,
+        consecutive_failures: 0,
+        next_retry_at: None,
+        last_cycle_status: Some("web_stub".to_string()),
+        last_cycle_duration_ms: None,
+        background_running: false,
+        bootstrap_required: false,
+    }))
+}
+
+/// Web runtime stub for device snapshot bootstrap.
+async fn bootstrap_device_snapshot() -> ApiResult<Json<DeviceSyncBootstrapResponse>> {
+    Ok(Json(DeviceSyncBootstrapResponse {
+        status: "skipped".to_string(),
+        message: "Snapshot bootstrap is desktop-only".to_string(),
+        snapshot_id: None,
+        cursor: None,
+    }))
+}
+
+/// Web runtime stub for one sync cycle trigger.
+async fn trigger_device_sync_cycle() -> ApiResult<Json<DeviceSyncCycleResponse>> {
+    Ok(Json(DeviceSyncCycleResponse {
+        status: "skipped".to_string(),
+        lock_version: 0,
+        pushed_count: 0,
+        pulled_count: 0,
+        cursor: 0,
+        needs_bootstrap: false,
+    }))
+}
+
+async fn start_device_sync_background_engine() -> ApiResult<Json<DeviceSyncBackgroundResponse>> {
+    Ok(Json(DeviceSyncBackgroundResponse {
+        status: "started".to_string(),
+        message: "Web runtime keeps sync engine as stub".to_string(),
+    }))
+}
+
+async fn stop_device_sync_background_engine() -> ApiResult<Json<DeviceSyncBackgroundResponse>> {
+    Ok(Json(DeviceSyncBackgroundResponse {
+        status: "stopped".to_string(),
+        message: "Web runtime keeps sync engine as stub".to_string(),
+    }))
+}
+
+async fn generate_device_snapshot_now() -> ApiResult<Json<DeviceSyncSnapshotUploadResponse>> {
+    Ok(Json(DeviceSyncSnapshotUploadResponse {
+        status: "skipped".to_string(),
+        snapshot_id: None,
+        oplog_seq: None,
+        message: "Snapshot upload is desktop-only".to_string(),
+    }))
+}
+
+async fn cancel_device_snapshot_upload() -> ApiResult<Json<DeviceSyncBackgroundResponse>> {
+    Ok(Json(DeviceSyncBackgroundResponse {
+        status: "cancel_requested".to_string(),
+        message: "Web runtime keeps snapshot upload cancellation as stub".to_string(),
+    }))
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Router
 // ─────────────────────────────────────────────────────────────────────────────
@@ -807,5 +926,33 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/connect/device/reinitialize",
             post(reinitialize_device_sync),
+        )
+        .route(
+            "/connect/device/engine-status",
+            get(get_device_sync_engine_status),
+        )
+        .route(
+            "/connect/device/bootstrap-snapshot",
+            post(bootstrap_device_snapshot),
+        )
+        .route(
+            "/connect/device/trigger-cycle",
+            post(trigger_device_sync_cycle),
+        )
+        .route(
+            "/connect/device/start-background",
+            post(start_device_sync_background_engine),
+        )
+        .route(
+            "/connect/device/stop-background",
+            post(stop_device_sync_background_engine),
+        )
+        .route(
+            "/connect/device/generate-snapshot",
+            post(generate_device_snapshot_now),
+        )
+        .route(
+            "/connect/device/cancel-snapshot",
+            post(cancel_device_snapshot_upload),
         )
 }

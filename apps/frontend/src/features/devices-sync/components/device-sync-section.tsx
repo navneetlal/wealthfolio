@@ -279,6 +279,30 @@ export function DeviceSyncSection() {
 
           {/* Content */}
           <div className="mt-4">
+            {state.bootstrapStatus === "running" && (
+              <div className="bg-muted/60 text-muted-foreground mb-3 flex items-center gap-2 rounded-md px-3 py-2 text-xs">
+                <Icons.Loader className="h-3.5 w-3.5 animate-spin" />
+                Sync bootstrap in progress...
+              </div>
+            )}
+            {state.bootstrapStatus === "error" && state.bootstrapMessage && (
+              <div className="bg-destructive/10 text-destructive mb-3 flex items-center gap-2 rounded-md px-3 py-2 text-xs">
+                <Icons.AlertCircle className="h-3.5 w-3.5" />
+                {state.bootstrapMessage}
+              </div>
+            )}
+            {state.bootstrapStatus === "success" && state.bootstrapMessage && (
+              <div className="bg-muted/40 text-muted-foreground mb-3 rounded-md px-3 py-2 text-xs">
+                {state.bootstrapMessage}
+              </div>
+            )}
+            {state.engineStatus && (
+              <div className="text-muted-foreground mb-3 rounded-md border px-3 py-2 text-xs">
+                Engine: {state.engineStatus.backgroundRunning ? "running" : "idle"} • Cycle:{" "}
+                {state.engineStatus.lastCycleStatus ?? "n/a"} • Cursor:{" "}
+                {state.engineStatus.cursor}
+              </div>
+            )}
             {!state.device ? (
               <Skeleton className="h-16 w-full rounded-lg" />
             ) : !isTrusted ? (

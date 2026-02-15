@@ -1,16 +1,12 @@
 import {
+  deleteSecret,
+  getSecret,
   isDesktop,
   listenDeepLink,
   logger,
   openUrlInBrowser,
-  getSecret,
   setSecret,
-  deleteSecret,
 } from "@/adapters";
-import { authenticate as authenticateWithASWebAuth } from "tauri-plugin-web-auth-api";
-import { getUserInfo } from "../services/broker-service";
-import { storeSyncSession, clearSyncSession } from "../services/auth-service";
-import type { UserInfo } from "../types";
 import { getPlatform } from "@/hooks/use-platform";
 import { CONNECT_ENABLED } from "@/lib/connect-config";
 import { createClient, Session, SupabaseClient, User } from "@supabase/supabase-js";
@@ -24,6 +20,10 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { authenticate as authenticateWithASWebAuth } from "tauri-plugin-web-auth-api";
+import { clearSyncSession, storeSyncSession } from "../services/auth-service";
+import { getUserInfo } from "../services/broker-service";
+import type { UserInfo } from "../types";
 
 // Auth configuration - these are public keys (safe for client-side)
 // Set via environment variables: CONNECT_AUTH_URL and CONNECT_AUTH_PUBLISHABLE_KEY
@@ -50,7 +50,7 @@ const getWebRedirectUrl = () => {
 // Uses env variable in dev, falls back to production URL for bundled builds
 const HOSTED_OAUTH_CALLBACK_URL =
   (import.meta.env.CONNECT_OAUTH_CALLBACK_URL as string) ||
-  "https://connect.wealthfolio.app/deeplink";
+  "https://connect-staging.wealthfolio.app/deeplink";
 
 type AuthCallbackPayload = { type: "code"; code: string } | { type: "error"; message: string };
 
