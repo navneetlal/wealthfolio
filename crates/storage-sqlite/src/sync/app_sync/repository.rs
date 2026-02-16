@@ -239,7 +239,10 @@ fn resolve_payload_key_version(conn: &mut SqliteConnection, requested_version: i
         .optional()
         .map_err(StorageError::from)?;
 
-    Ok(maybe_row.and_then(|row| row.key_version).unwrap_or(1).max(1))
+    Ok(maybe_row
+        .and_then(|row| row.key_version)
+        .unwrap_or(1)
+        .max(1))
 }
 
 fn resolve_local_device_id(conn: &mut SqliteConnection) -> Option<String> {
@@ -454,7 +457,10 @@ fn apply_remote_event_lww_tx(
                 last_client_timestamp: client_timestamp_value.clone(),
                 last_seq: seq_value,
             })
-            .on_conflict((sync_entity_metadata::entity, sync_entity_metadata::entity_id))
+            .on_conflict((
+                sync_entity_metadata::entity,
+                sync_entity_metadata::entity_id,
+            ))
             .do_update()
             .set((
                 sync_entity_metadata::last_event_id.eq(event_id_value.clone()),
@@ -799,9 +805,13 @@ impl AppSyncRepository {
 
         self.writer
             .exec(move |conn| {
-                // Disable FK checks during batch replay — events may arrive
+                // Defer FK checks during batch replay — events may arrive
                 // out of dependency order (e.g. activity before its account).
-                diesel::sql_query("PRAGMA foreign_keys = OFF")
+                // Note: writer actor wraps jobs in a transaction, and SQLite
+                // ignores PRAGMA foreign_keys toggles inside active transactions.
+                // defer_foreign_keys applies to the current transaction and lets
+                // constraints validate at commit time.
+                diesel::sql_query("PRAGMA defer_foreign_keys = ON")
                     .execute(conn)
                     .map_err(StorageError::from)?;
 
@@ -811,21 +821,28 @@ impl AppSyncRepository {
                     {
                         if apply_remote_event_lww_tx(
                             conn,
-                            entity,
-                            entity_id,
-                            op,
-                            event_id,
-                            client_timestamp,
+                            entity.clone(),
+                            entity_id.clone(),
+                            op.clone(),
+                            event_id.clone(),
+                            client_timestamp.clone(),
                             seq,
                             payload,
-                        )? {
+                        )
+                        .map_err(|err| {
+                            Error::Database(DatabaseError::Internal(format!(
+                                "Replay apply failed for entity={:?} entity_id={} op={:?} event_id={} seq={}: {}",
+                                entity, entity_id, op, event_id, seq, err
+                            )))
+                        })?
+                        {
                             applied += 1;
                         }
                     }
                     Ok(applied)
                 })();
 
-                let _ = diesel::sql_query("PRAGMA foreign_keys = ON").execute(conn);
+                let _ = diesel::sql_query("PRAGMA defer_foreign_keys = OFF").execute(conn);
                 result
             })
             .await
@@ -1127,28 +1144,28 @@ impl AppSyncRepository {
             let snapshot_alias = format!("snapshot_export_{}", Uuid::now_v7().simple());
             let attach_sql = format!("ATTACH DATABASE '{}' AS {}", escaped_path, snapshot_alias);
             let tx_result = conn.immediate_transaction::<_, StorageError, _>(|tx| {
-                    diesel::sql_query(attach_sql.clone())
-                        .execute(tx)
-                        .map_err(StorageError::from)?;
+                diesel::sql_query(attach_sql.clone())
+                    .execute(tx)
+                    .map_err(StorageError::from)?;
 
-                    let run_export = (|| -> Result<()> {
-                        for table in &table_set {
-                            let copy_sql = format!(
-                                "CREATE TABLE {snapshot_alias}.{} AS SELECT * FROM main.{}",
-                                quote_identifier(table),
-                                quote_identifier(table)
-                            );
-                            diesel::sql_query(copy_sql)
-                                .execute(tx)
-                                .map_err(StorageError::from)?;
-                        }
-                        Ok(())
-                    })();
+                let run_export = (|| -> Result<()> {
+                    for table in &table_set {
+                        let copy_sql = format!(
+                            "CREATE TABLE {snapshot_alias}.{} AS SELECT * FROM main.{}",
+                            quote_identifier(table),
+                            quote_identifier(table)
+                        );
+                        diesel::sql_query(copy_sql)
+                            .execute(tx)
+                            .map_err(StorageError::from)?;
+                    }
+                    Ok(())
+                })();
 
-                    let detach_sql = format!("DETACH DATABASE {}", snapshot_alias);
-                    let _ = diesel::sql_query(detach_sql).execute(tx);
-                    run_export.map_err(StorageError::from)
-                });
+                let detach_sql = format!("DETACH DATABASE {}", snapshot_alias);
+                let _ = diesel::sql_query(detach_sql).execute(tx);
+                run_export.map_err(StorageError::from)
+            });
             if let Err(err) = tx_result {
                 let _ = std::fs::remove_file(&snapshot_path);
                 return Err(Error::from(err));
