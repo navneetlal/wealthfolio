@@ -23,8 +23,9 @@ use wealthfolio_core::{
 use crate::{error::ApiResult, main_lib::AppState};
 
 use super::dto::{
-    AllocationHoldingsQuery, CheckHoldingsImportRequest, CheckHoldingsImportResult,
-    DeleteSnapshotQuery, HistoryQuery, HoldingItemQuery, HoldingsQuery, HoldingsSnapshotInput,
+    AllocationHoldingsQuery, AssetHoldingsQuery, CheckHoldingsImportRequest,
+    CheckHoldingsImportResult, DeleteSnapshotQuery, HistoryQuery, HoldingItemQuery, HoldingsQuery,
+    HoldingsSnapshotInput,
     ImportHoldingsCsvRequest, ImportHoldingsCsvResult, SaveManualHoldingsRequest,
     SnapshotDateQuery, SnapshotInfo, SnapshotsQuery, SymbolCheckResult,
 };
@@ -52,6 +53,26 @@ pub async fn get_holding(
         .get_holding(&q.account_id, &q.asset_id, &base)
         .await?;
     Ok(Json(holding))
+}
+
+pub async fn get_asset_holdings(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<AssetHoldingsQuery>,
+) -> ApiResult<Json<Vec<Holding>>> {
+    let base = state.base_currency.read().unwrap().clone();
+    let accounts = state.account_service.get_active_accounts()?;
+
+    let mut result = Vec::new();
+    for account in accounts {
+        if let Ok(Some(holding)) = state
+            .holdings_service
+            .get_holding(&account.id, &q.asset_id, &base)
+            .await
+        {
+            result.push(holding);
+        }
+    }
+    Ok(Json(result))
 }
 
 pub async fn get_historical_valuations(

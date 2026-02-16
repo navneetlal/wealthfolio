@@ -130,6 +130,7 @@ export {
   calculatePerformanceSummary,
   calculateAccountsSimplePerformance,
   getHolding,
+  getAssetHoldings,
   getPortfolioAllocations,
   getHoldingsByAllocation,
   saveManualHoldings,

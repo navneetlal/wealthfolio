@@ -105,6 +105,31 @@ pub async fn get_holding(
 }
 
 #[tauri::command]
+pub async fn get_asset_holdings(
+    state: State<'_, Arc<ServiceContext>>,
+    asset_id: String,
+) -> Result<Vec<Holding>, String> {
+    debug!("Get holdings for asset {} across all accounts", asset_id);
+    let base_currency = state.get_base_currency();
+    let accounts = state
+        .account_service()
+        .get_active_accounts()
+        .map_err(|e| format!("Failed to get accounts: {}", e))?;
+
+    let mut result = Vec::new();
+    for account in accounts {
+        if let Ok(Some(holding)) = state
+            .holdings_service()
+            .get_holding(&account.id, &asset_id, &base_currency)
+            .await
+        {
+            result.push(holding);
+        }
+    }
+    Ok(result)
+}
+
+#[tauri::command]
 pub async fn get_portfolio_allocations(
     state: State<'_, Arc<ServiceContext>>,
     account_id: String,

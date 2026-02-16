@@ -17,6 +17,12 @@ pub struct HoldingItemQuery {
 }
 
 #[derive(Deserialize)]
+pub struct AssetHoldingsQuery {
+    #[serde(rename = "assetId")]
+    pub asset_id: String,
+}
+
+#[derive(Deserialize)]
 pub struct HistoryQuery {
     #[serde(rename = "accountId")]
     pub account_id: String,

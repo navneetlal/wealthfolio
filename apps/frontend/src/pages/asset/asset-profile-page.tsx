@@ -25,6 +25,11 @@ import { ValueHistoryDataGrid } from "./alternative-assets";
 import AssetDetailCard from "./asset-detail-card";
 import { AssetEditSheet } from "./asset-edit-sheet";
 import AssetHistoryCard from "./asset-history-card";
+import {
+  AssetAccountHoldings,
+  AssetSnapshotHistory,
+  useHasManualSnapshots,
+} from "./asset-account-holdings";
 import AssetLotsTable from "./asset-lots-table";
 import { useAssetProfile } from "./hooks/use-asset-profile";
 import { useAssetProfileMutations } from "./hooks/use-asset-profile-mutations";
@@ -98,6 +103,19 @@ export const AssetProfilePage = () => {
       ? tabParam
       : "overview";
   const [activeTab, setActiveTab] = useState<AssetTab>(defaultTab);
+  type OverviewSubTab = "about" | "holdings" | "snapshots";
+  const [overviewSubTab, setOverviewSubTab] = useState<OverviewSubTab>("about");
+  const hasManualSnapshots = useHasManualSnapshots(assetId);
+  const overviewSubTabs = useMemo(() => {
+    const items: { value: OverviewSubTab; label: string }[] = [
+      { value: "about", label: "About" },
+      { value: "holdings", label: "Holdings" },
+    ];
+    if (hasManualSnapshots) {
+      items.push({ value: "snapshots", label: "Snapshots" });
+    }
+    return items;
+  }, [hasManualSnapshots]);
   const [actionPaletteOpen, setActionPaletteOpen] = useState(false);
   const [editSheetOpen, setEditSheetOpen] = useState(false);
   const [editSheetDefaultTab, setEditSheetDefaultTab] = useState<
@@ -420,68 +438,83 @@ export const AssetProfilePage = () => {
               )}
             </div>
 
-            <div className="space-y-4">
-              <h3 className="text-lg font-bold">About</h3>
+            <AnimatedToggleGroup
+              items={overviewSubTabs}
+              value={overviewSubTab}
+              onValueChange={(v: OverviewSubTab) => setOverviewSubTab(v)}
+              className="text-sm"
+            />
 
-              {/* Category badges */}
-              <div className="flex flex-wrap items-center gap-2">
-                {isClassificationsLoading ? (
-                  <>
-                    <Skeleton className="h-6 w-16 rounded-full" />
-                    <Skeleton className="h-6 w-20 rounded-full" />
-                  </>
-                ) : categoryBadges.length > 0 ? (
-                  <>
-                    {categoryBadges.map((badge) => (
-                      <Badge
-                        key={badge.id}
-                        variant="secondary"
-                        className="gap-1.5"
-                        style={{
-                          backgroundColor: `${badge.categoryColor}20`,
-                          color: badge.categoryColor,
-                          borderColor: badge.categoryColor,
+            {overviewSubTab === "about" && (
+              <div className="space-y-4">
+                {/* Category badges */}
+                <div className="flex flex-wrap items-center gap-2">
+                  {isClassificationsLoading ? (
+                    <>
+                      <Skeleton className="h-6 w-16 rounded-full" />
+                      <Skeleton className="h-6 w-20 rounded-full" />
+                    </>
+                  ) : categoryBadges.length > 0 ? (
+                    <>
+                      {categoryBadges.map((badge) => (
+                        <Badge
+                          key={badge.id}
+                          variant="secondary"
+                          className="gap-1.5"
+                          style={{
+                            backgroundColor: `${badge.categoryColor}20`,
+                            color: badge.categoryColor,
+                            borderColor: badge.categoryColor,
+                          }}
+                        >
+                          <span
+                            className="h-2 w-2 rounded-full"
+                            style={{ backgroundColor: badge.categoryColor }}
+                          />
+                          {badge.categoryName}
+                        </Badge>
+                      ))}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 text-xs"
+                        onClick={() => {
+                          setEditSheetDefaultTab("classification");
+                          setEditSheetOpen(true);
                         }}
                       >
-                        <span
-                          className="h-2 w-2 rounded-full"
-                          style={{ backgroundColor: badge.categoryColor }}
-                        />
-                        {badge.categoryName}
-                      </Badge>
-                    ))}
+                        More
+                      </Button>
+                    </>
+                  ) : (
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="h-6 text-xs"
+                      className="text-muted-foreground h-6 text-xs"
                       onClick={() => {
                         setEditSheetDefaultTab("classification");
                         setEditSheetOpen(true);
                       }}
                     >
-                      More
+                      + Add classifications
                     </Button>
-                  </>
-                ) : (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="text-muted-foreground h-6 text-xs"
-                    onClick={() => {
-                      setEditSheetDefaultTab("classification");
-                      setEditSheetOpen(true);
-                    }}
-                  >
-                    + Add classifications
-                  </Button>
-                )}
-              </div>
+                  )}
+                </div>
 
-              {/* Notes section */}
-              <p className="text-muted-foreground text-sm">
-                {assetProfile?.notes || holding?.instrument?.notes || "No notes added."}
-              </p>
-            </div>
+                {/* Notes section */}
+                <p className="text-muted-foreground text-sm">
+                  {assetProfile?.notes || holding?.instrument?.notes || "No notes added."}
+                </p>
+              </div>
+            )}
+
+            {overviewSubTab === "holdings" && (
+              <AssetAccountHoldings assetId={assetId} baseCurrency={baseCurrency} />
+            )}
+
+            {overviewSubTab === "snapshots" && (
+              <AssetSnapshotHistory assetId={assetId} baseCurrency={baseCurrency} />
+            )}
           </div>
         ),
       });
@@ -549,6 +582,8 @@ export const AssetProfilePage = () => {
     categoryBadges,
     isClassificationsLoading,
     assetProfile,
+    overviewSubTab,
+    overviewSubTabs,
   ]);
 
   const isLoading = isHoldingLoading || isQuotesLoading || isAssetProfileLoading;
@@ -927,68 +962,83 @@ export const AssetProfilePage = () => {
                   )}
                 </div>
 
-                <div className="space-y-4">
-                  <h3 className="text-lg font-bold">About</h3>
+                <AnimatedToggleGroup
+                  items={overviewSubTabs}
+                  value={overviewSubTab}
+                  onValueChange={(v: OverviewSubTab) => setOverviewSubTab(v)}
+                  className="text-sm"
+                />
 
-                  {/* Category badges */}
-                  <div className="flex flex-wrap items-center gap-2">
-                    {isClassificationsLoading ? (
-                      <>
-                        <Skeleton className="h-6 w-16 rounded-full" />
-                        <Skeleton className="h-6 w-20 rounded-full" />
-                      </>
-                    ) : categoryBadges.length > 0 ? (
-                      <>
-                        {categoryBadges.map((badge) => (
-                          <Badge
-                            key={badge.id}
-                            variant="secondary"
-                            className="gap-1.5"
-                            style={{
-                              backgroundColor: `${badge.categoryColor}20`,
-                              color: badge.categoryColor,
-                              borderColor: badge.categoryColor,
+                {overviewSubTab === "about" && (
+                  <div className="space-y-4">
+                    {/* Category badges */}
+                    <div className="flex flex-wrap items-center gap-2">
+                      {isClassificationsLoading ? (
+                        <>
+                          <Skeleton className="h-6 w-16 rounded-full" />
+                          <Skeleton className="h-6 w-20 rounded-full" />
+                        </>
+                      ) : categoryBadges.length > 0 ? (
+                        <>
+                          {categoryBadges.map((badge) => (
+                            <Badge
+                              key={badge.id}
+                              variant="secondary"
+                              className="gap-1.5"
+                              style={{
+                                backgroundColor: `${badge.categoryColor}20`,
+                                color: badge.categoryColor,
+                                borderColor: badge.categoryColor,
+                              }}
+                            >
+                              <span
+                                className="h-2 w-2 rounded-full"
+                                style={{ backgroundColor: badge.categoryColor }}
+                              />
+                              {badge.categoryName}
+                            </Badge>
+                          ))}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 text-xs"
+                            onClick={() => {
+                              setEditSheetDefaultTab("classification");
+                              setEditSheetOpen(true);
                             }}
                           >
-                            <span
-                              className="h-2 w-2 rounded-full"
-                              style={{ backgroundColor: badge.categoryColor }}
-                            />
-                            {badge.categoryName}
-                          </Badge>
-                        ))}
+                            More
+                          </Button>
+                        </>
+                      ) : (
                         <Button
                           variant="ghost"
                           size="sm"
-                          className="h-6 text-xs"
+                          className="text-muted-foreground h-6 text-xs"
                           onClick={() => {
                             setEditSheetDefaultTab("classification");
                             setEditSheetOpen(true);
                           }}
                         >
-                          More
+                          + Add classifications
                         </Button>
-                      </>
-                    ) : (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="text-muted-foreground h-6 text-xs"
-                        onClick={() => {
-                          setEditSheetDefaultTab("classification");
-                          setEditSheetOpen(true);
-                        }}
-                      >
-                        + Add classifications
-                      </Button>
-                    )}
-                  </div>
+                      )}
+                    </div>
 
-                  {/* Notes section */}
-                  <p className="text-muted-foreground text-sm">
-                    {assetProfile?.notes || holding?.instrument?.notes || "No notes added."}
-                  </p>
-                </div>
+                    {/* Notes section */}
+                    <p className="text-muted-foreground text-sm">
+                      {assetProfile?.notes || holding?.instrument?.notes || "No notes added."}
+                    </p>
+                  </div>
+                )}
+
+                {overviewSubTab === "holdings" && (
+                  <AssetAccountHoldings assetId={assetId} baseCurrency={baseCurrency} />
+                )}
+
+                {overviewSubTab === "snapshots" && (
+                  <AssetSnapshotHistory assetId={assetId} baseCurrency={baseCurrency} />
+                )}
               </TabsContent>
             )}
 

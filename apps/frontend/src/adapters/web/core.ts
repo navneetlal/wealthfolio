@@ -31,6 +31,7 @@ export const COMMANDS: CommandMap = {
   restore_database: { method: "POST", path: "/utilities/database/restore" },
   get_holdings: { method: "GET", path: "/holdings" },
   get_holding: { method: "GET", path: "/holdings/item" },
+  get_asset_holdings: { method: "GET", path: "/holdings/by-asset" },
   get_historical_valuations: { method: "GET", path: "/valuations/history" },
   get_latest_valuations: { method: "GET", path: "/valuations/latest" },
   get_portfolio_allocations: { method: "GET", path: "/allocations" },
@@ -197,7 +198,10 @@ export const COMMANDS: CommandMap = {
   clear_device_sync_data: { method: "DELETE", path: "/connect/device/sync-data" },
   reinitialize_device_sync: { method: "POST", path: "/connect/device/reinitialize" },
   device_sync_engine_status: { method: "GET", path: "/connect/device/engine-status" },
-  device_sync_bootstrap_snapshot_if_needed: { method: "POST", path: "/connect/device/bootstrap-snapshot" },
+  device_sync_bootstrap_snapshot_if_needed: {
+    method: "POST",
+    path: "/connect/device/bootstrap-snapshot",
+  },
   device_sync_trigger_cycle: { method: "POST", path: "/connect/device/trigger-cycle" },
   device_sync_start_background_engine: {
     method: "POST",
@@ -333,6 +337,11 @@ export const invoke = async <T>(command: string, payload?: Record<string, unknow
       params.set("accountId", accountId);
       params.set("assetId", assetId);
       url += `?${params.toString()}`;
+      break;
+    }
+    case "get_asset_holdings": {
+      const p = payload as { assetId: string };
+      url += `?assetId=${encodeURIComponent(p.assetId)}`;
       break;
     }
     case "get_historical_valuations": {
