@@ -1107,6 +1107,36 @@ pub async fn delete_snapshot(
         snapshot.source, account_id, date
     );
 
+    // If no user-created snapshots remain, clean up orphan SYNTHETIC snapshots
+    let remaining = state
+        .snapshot_repository()
+        .get_snapshots_by_account(&account_id, None, None)
+        .map_err(|e| format!("Failed to check remaining snapshots: {}", e))?;
+
+    let has_user_snapshots = remaining.iter().any(|s| {
+        s.source != SnapshotSource::Calculated && s.source != SnapshotSource::Synthetic
+    });
+
+    if !has_user_snapshots {
+        let synthetic_dates: Vec<NaiveDate> = remaining
+            .iter()
+            .filter(|s| s.source == SnapshotSource::Synthetic)
+            .map(|s| s.snapshot_date)
+            .collect();
+        if !synthetic_dates.is_empty() {
+            state
+                .snapshot_repository()
+                .delete_snapshots_for_account_and_dates(&account_id, &synthetic_dates)
+                .await
+                .map_err(|e| format!("Failed to clean up synthetic snapshots: {}", e))?;
+            info!(
+                "Cleaned up {} orphan SYNTHETIC snapshots for account {}",
+                synthetic_dates.len(),
+                account_id
+            );
+        }
+    }
+
     // Trigger portfolio update to recalculate valuations
     let payload = PortfolioRequestPayload::builder()
         .account_ids(Some(vec![account_id.clone()]))
