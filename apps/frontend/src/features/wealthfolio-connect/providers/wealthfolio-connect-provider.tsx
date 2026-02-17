@@ -37,9 +37,6 @@ const REFRESH_TOKEN_KEY = "sync_refresh_token";
 // Deep-link URL for desktop callbacks (custom URL scheme)
 const DESKTOP_DEEP_LINK_URL = "wealthfolio://auth/callback";
 
-// Universal link callback URL for Tauri mobile (associated domain)
-const MOBILE_UNIVERSAL_LINK_CALLBACK_URL = "https://auth.wealthfolio.app/callback";
-
 // Web redirect URL for OAuth and magic link
 const getWebRedirectUrl = () => {
   return `${window.location.origin}/auth/callback`;
@@ -534,12 +531,10 @@ function EnabledWealthfolioConnectProvider({ children }: { children: ReactNode }
         // Desktop prod uses hosted callback → deep link (can't use in dev - URL scheme not registered)
         // Dev mode uses webview redirect (simpler, no deep link registration needed)
         const redirectUrl = useASWebAuth
-          ? DESKTOP_DEEP_LINK_URL // iOS: Always use deep link for ASWebAuthenticationSession
+          ? DESKTOP_DEEP_LINK_URL // iOS: direct custom scheme, captured by ASWebAuth
           : isTauri && import.meta.env.PROD
-            ? isMobile
-              ? MOBILE_UNIVERSAL_LINK_CALLBACK_URL // Android prod
-              : HOSTED_OAUTH_CALLBACK_URL // Desktop prod
-            : getWebRedirectUrl(); // Web or dev mode (webview redirect)
+            ? HOSTED_OAUTH_CALLBACK_URL // Desktop & Android: bounce page → wealthfolio://
+            : getWebRedirectUrl(); // Web or dev mode
 
         const useSystemBrowser = isTauri && import.meta.env.PROD && !useASWebAuth;
         const queryParams =
@@ -627,8 +622,8 @@ function EnabledWealthfolioConnectProvider({ children }: { children: ReactNode }
         const redirectUrl =
           isTauri && import.meta.env.PROD
             ? isMobile
-              ? MOBILE_UNIVERSAL_LINK_CALLBACK_URL
-              : DESKTOP_DEEP_LINK_URL
+              ? HOSTED_OAUTH_CALLBACK_URL // Mobile: bounce page → wealthfolio://
+              : DESKTOP_DEEP_LINK_URL // Desktop: direct wealthfolio:// from email client
             : getWebRedirectUrl();
 
         const { error: otpError } = await supabase.auth.signInWithOtp({
