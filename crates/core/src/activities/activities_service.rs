@@ -833,8 +833,18 @@ impl ActivityService {
             }
         }
 
-        // Compute idempotency key for deduplication
-        if let Ok(date) = DateTime::parse_from_rfc3339(&activity.activity_date)
+        // Preserve explicit idempotency key when provided (e.g., intentional manual duplicates).
+        // Otherwise compute a stable content-based key for deduplication.
+        let explicit_idempotency_key = activity
+            .idempotency_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+
+        if let Some(key) = explicit_idempotency_key {
+            activity.idempotency_key = Some(key);
+        } else if let Ok(date) = DateTime::parse_from_rfc3339(&activity.activity_date)
             .map(|dt| dt.with_timezone(&Utc))
             .or_else(|_| {
                 NaiveDate::parse_from_str(&activity.activity_date, "%Y-%m-%d")
