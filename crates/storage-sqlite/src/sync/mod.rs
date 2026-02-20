@@ -66,7 +66,7 @@ pub fn should_sync_outbox_for_activity(
 pub fn should_sync_outbox_for_snapshot_source(source: SnapshotSource) -> bool {
     matches!(
         source,
-        SnapshotSource::ManualEntry | SnapshotSource::Synthetic
+        SnapshotSource::ManualEntry | SnapshotSource::CsvImport | SnapshotSource::Synthetic
     )
 }
 
@@ -160,10 +160,10 @@ mod tests {
             SnapshotSource::ManualEntry
         ));
         assert!(should_sync_outbox_for_snapshot_source(
-            SnapshotSource::Synthetic
-        ));
-        assert!(!should_sync_outbox_for_snapshot_source(
             SnapshotSource::CsvImport
+        ));
+        assert!(should_sync_outbox_for_snapshot_source(
+            SnapshotSource::Synthetic
         ));
         assert!(!should_sync_outbox_for_snapshot_source(
             SnapshotSource::BrokerImported

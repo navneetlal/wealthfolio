@@ -1290,7 +1290,7 @@ impl AppSyncRepository {
         /// Tables not listed here are exported unfiltered.
         const SYNC_TABLE_EXPORT_FILTERS: &[(&str, &str)] = &[(
             "holdings_snapshots",
-            "source IN ('MANUAL_ENTRY', 'SYNTHETIC')",
+            "source IN ('MANUAL_ENTRY', 'CSV_IMPORT', 'SYNTHETIC')",
         )];
 
         let pool = Arc::clone(&self.pool);

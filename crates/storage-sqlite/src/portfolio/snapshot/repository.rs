@@ -1477,8 +1477,8 @@ mod tests {
 
         assert_eq!(
             count_pending_outbox(&pool),
-            2,
-            "Only manual/synthetic snapshots should be enqueued"
+            3,
+            "Only manual/csv/synthetic snapshots should be enqueued"
         );
     }
 }
