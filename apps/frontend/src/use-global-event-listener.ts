@@ -2,6 +2,7 @@
 import {
   updatePortfolio,
   listenMarketSyncComplete,
+  listenMarketSyncError,
   listenMarketSyncStart,
   listenPortfolioUpdateComplete,
   listenPortfolioUpdateError,
@@ -94,6 +95,20 @@ const useGlobalEventListener = () => {
           },
         });
       }
+    };
+
+    const handleMarketSyncError = (event: { payload: string }) => {
+      const errorMsg = event.payload || "Unknown error";
+      if (isMobileViewportRef.current && syncContextRef.current) {
+        syncContextRef.current.setIdle();
+      } else {
+        toast.dismiss(TOAST_IDS.marketSyncStart);
+      }
+      toast.error("Market Data Sync Failed", {
+        description: `${errorMsg}. Please try again later.`,
+        duration: 10000,
+      });
+      logger.error("Market sync error: " + errorMsg);
     };
 
     const handlePortfolioUpdateStart = () => {
@@ -251,6 +266,7 @@ const useGlobalEventListener = () => {
       });
       const unlistenMarketStart = await listenMarketSyncStart(handleMarketSyncStart);
       const unlistenMarketComplete = await listenMarketSyncComplete(handleMarketSyncComplete);
+      const unlistenMarketError = await listenMarketSyncError(handleMarketSyncError);
       const unlistenDatabaseRestored = await listenDatabaseRestored(handleDatabaseRestored);
       const unlistenBrokerSyncComplete = await listenBrokerSyncComplete(handleBrokerSyncComplete);
       const unlistenBrokerSyncError = await listenBrokerSyncError(handleBrokerSyncError);
@@ -261,6 +277,7 @@ const useGlobalEventListener = () => {
         unlistenPortfolioSyncError();
         unlistenMarketStart();
         unlistenMarketComplete();
+        unlistenMarketError();
         unlistenDatabaseRestored();
         unlistenBrokerSyncComplete();
         unlistenBrokerSyncError();
