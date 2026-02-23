@@ -1,16 +1,16 @@
 import {
-  isWeb,
-  logger,
   backupDatabase,
   backupDatabaseToPath,
-  restoreDatabase,
+  isWeb,
+  logger,
   openDatabaseFileDialog,
-  openFolderDialog,
   openFileSaveDialog,
+  openFolderDialog,
+  restoreDatabase,
 } from "@/adapters";
 import { getPlatform as getRuntimePlatform, usePlatform } from "@/hooks/use-platform";
-import { toast } from "@wealthfolio/ui/components/ui/use-toast";
 import { useMutation } from "@tanstack/react-query";
+import { toast } from "@wealthfolio/ui/components/ui/use-toast";
 
 export function useBackupRestore() {
   const { platform } = usePlatform();
@@ -87,8 +87,8 @@ export function useBackupRestore() {
       }
 
       const runtimePlatform = await getRuntimePlatform();
-      if (!runtimePlatform.is_desktop) {
-        throw new Error("Restore is only supported in the desktop app");
+      if (!runtimePlatform.is_desktop && runtimePlatform.os !== "ios") {
+        throw new Error("Restore is currently supported on desktop and iOS only");
       }
 
       // Open file dialog to let user choose backup file
@@ -128,10 +128,11 @@ export function useBackupRestore() {
   };
 
   const performRestore = async () => {
-    if (platformMode !== "desktop") {
+    const runtimePlatform = await getRuntimePlatform();
+    if (!runtimePlatform.is_desktop && runtimePlatform.os !== "ios") {
       toast({
         title: "Restore unavailable",
-        description: "Please use the desktop app to restore backups.",
+        description: "Please use the desktop app or iOS app to restore backups.",
       });
       return;
     }
@@ -148,6 +149,7 @@ export function useBackupRestore() {
     performRestore,
     isBackingUp,
     isRestoring,
+    canRestore: platformMode === "desktop" || platform?.os === "ios",
     isDesktop: platformMode === "desktop",
     isMobile: platformMode === "mobile",
     isWeb,

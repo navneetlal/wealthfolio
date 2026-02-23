@@ -80,3 +80,4 @@ tauri-plugin-barcode-scanner = { git = "https://github.com/tauri-apps/plugins-wo
 
 [target.'cfg(target_os = "ios")'.dependencies]
 tauri-plugin-web-auth = "1"
+tauri-plugin-mobile-share = "0.1.2"

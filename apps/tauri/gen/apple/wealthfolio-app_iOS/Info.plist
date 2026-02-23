@@ -17,7 +17,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>3.0.0</string>
 	<key>CFBundleVersion</key>
-	<string>3.0.0.5</string>
+	<string>3.0.0</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>
@@ -42,5 +42,20 @@
 	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>Wealthfolio needs camera access to scan QR codes for device pairing.</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLSchemes</key>
+			<array/>
+			<key>CFBundleURLName</key>
+			<string>https</string>
+		</dict>
+		<dict>
+			<key>CFBundleURLSchemes</key>
+			<array/>
+			<key>CFBundleURLName</key>
+			<string>https</string>
+		</dict>
+	</array>
 </dict>
 </plist>

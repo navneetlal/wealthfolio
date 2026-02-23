@@ -134,6 +134,7 @@ mod mobile {
         #[cfg(target_os = "ios")]
         {
             let _ = handle.plugin(tauri_plugin_web_auth::init());
+            let _ = handle.plugin(tauri_plugin_mobile_share::init());
         }
     }
 
