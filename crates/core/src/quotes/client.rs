@@ -41,7 +41,7 @@ use wealthfolio_market_data::{
     AlphaVantageProvider, AssetProfile as MarketAssetProfile, FinnhubProvider,
     MarketDataAppProvider, MetalPriceApiProvider, ProviderId, ProviderRegistry,
     Quote as MarketQuote, QuoteContext, ResolverChain, SearchResult as MarketSearchResult,
-    YahooProvider,
+    SplitEvent, YahooProvider,
 };
 
 /// Market data error types.
@@ -362,6 +362,22 @@ impl MarketDataClient {
     /// Get the number of available providers.
     pub fn provider_count(&self) -> usize {
         self.registry.providers().len()
+    }
+
+    /// Fetch split history for an asset over the given date range.
+    ///
+    /// Returns empty vec if no provider supports splits for this asset.
+    pub async fn fetch_splits(
+        &self,
+        asset: &Asset,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Vec<SplitEvent> {
+        let context = match self.build_quote_context(asset) {
+            Ok(ctx) => ctx,
+            Err(_) => return vec![],
+        };
+        self.registry.fetch_splits(&context, start, end).await
     }
 
     /// Fetch historical quotes for multiple assets.
