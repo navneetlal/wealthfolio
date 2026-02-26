@@ -88,6 +88,37 @@ export const isSplitActivity = (activityType: string): boolean => {
   return activityType === ActivityType.SPLIT;
 };
 
+// Format a split ratio stored as a decimal multiplier into a human-readable ratio string.
+// Uses rational approximation to find the simplest N:D form.
+// e.g. 2 → "2:1", 0.2 → "1:5", 0.3 → "3:10", 1.5 → "3:2"
+export const formatSplitRatio = (amount: number): string => {
+  if (!amount || amount <= 0) return "0:1";
+
+  const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b));
+
+  // Find the best rational approximation N/D ≈ amount with D ≤ maxDenom
+  const toFraction = (x: number, maxDenom = 1000): [number, number] => {
+    let bestN = 1,
+      bestD = 1,
+      minErr = Infinity;
+    for (let d = 1; d <= maxDenom; d++) {
+      const n = Math.round(x * d);
+      const err = Math.abs(x - n / d);
+      if (err < minErr) {
+        minErr = err;
+        bestN = n;
+        bestD = d;
+      }
+      if (err < 1e-9) break;
+    }
+    const g = gcd(bestN, bestD);
+    return [bestN / g, bestD / g];
+  };
+
+  const [n, d] = toFraction(amount);
+  return `${n}:${d}`;
+};
+
 /**
  * Gets the fee amount from an activity
  * @param activity The activity to get the fee from

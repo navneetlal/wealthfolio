@@ -4,6 +4,7 @@ import {
   isCashTransfer,
   isIncomeActivity,
   calculateActivityValue,
+  formatSplitRatio,
 } from "./activity-utils";
 import { ActivityDetails } from "./types";
 
@@ -172,6 +173,35 @@ describe("Activity Utilities", () => {
       });
 
       expect(calculateActivityValue(transferOut)).toBe(1010);
+    });
+  });
+
+  describe("formatSplitRatio", () => {
+    it("formats forward splits as N:1", () => {
+      expect(formatSplitRatio(2)).toBe("2:1");
+      expect(formatSplitRatio(3)).toBe("3:1");
+      expect(formatSplitRatio(10)).toBe("10:1");
+    });
+
+    it("formats reverse splits as 1:N", () => {
+      expect(formatSplitRatio(0.5)).toBe("1:2");
+      expect(formatSplitRatio(0.2)).toBe("1:5");
+      expect(formatSplitRatio(0.1)).toBe("1:10");
+    });
+
+    it("formats non-unit numerator splits correctly", () => {
+      expect(formatSplitRatio(0.3)).toBe("3:10");
+      expect(formatSplitRatio(1.5)).toBe("3:2");
+      expect(formatSplitRatio(2 / 3)).toBe("2:3");
+    });
+
+    it("formats 1:1 split (amount=1) as 1:1", () => {
+      expect(formatSplitRatio(1)).toBe("1:1");
+    });
+
+    it("returns 0:1 for invalid amounts (zero or negative)", () => {
+      expect(formatSplitRatio(0)).toBe("0:1");
+      expect(formatSplitRatio(-1)).toBe("0:1");
     });
   });
 });
