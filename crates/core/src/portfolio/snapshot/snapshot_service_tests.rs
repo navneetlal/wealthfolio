@@ -2407,6 +2407,129 @@ mod tests {
         assert_eq!(pos.average_cost, dec!(100));
     }
 
+    #[tokio::test]
+    async fn test_split_multi_account_no_double_counting() {
+        // Regression: when the same asset is held in multiple accounts, sync_splits inserts
+        // one SPLIT activity per account. calculate_split_factors must deduplicate by date so
+        // the split is applied only once, not N times.
+        let base = Arc::new(RwLock::new("USD".to_string()));
+
+        let mut account_repo = MockAccountRepository::new();
+        let acc1 = create_test_account("acc1", "USD", "Account 1");
+        let acc2 = create_test_account("acc2", "USD", "Account 2");
+        account_repo.add_account(acc1.clone());
+        account_repo.add_account(acc2.clone());
+
+        let d1 = NaiveDate::from_ymd_opt(2025, 1, 10).unwrap();
+        let d2 = NaiveDate::from_ymd_opt(2025, 1, 20).unwrap();
+
+        // Each account buys 10 AAPL at $200
+        let deposit1 = create_test_activity(
+            "dep1",
+            &acc1.id,
+            Some("CASH:USD"),
+            "DEPOSIT",
+            d1,
+            None,
+            None,
+            Some(dec!(2000)),
+            "USD",
+        );
+        let buy1 = create_test_activity(
+            "buy1",
+            &acc1.id,
+            Some("AAPL"),
+            "BUY",
+            d1,
+            Some(dec!(10)),
+            Some(dec!(200)),
+            Some(dec!(2000)),
+            "USD",
+        );
+        let deposit2 = create_test_activity(
+            "dep2",
+            &acc2.id,
+            Some("CASH:USD"),
+            "DEPOSIT",
+            d1,
+            None,
+            None,
+            Some(dec!(2000)),
+            "USD",
+        );
+        let buy2 = create_test_activity(
+            "buy2",
+            &acc2.id,
+            Some("AAPL"),
+            "BUY",
+            d1,
+            Some(dec!(10)),
+            Some(dec!(200)),
+            Some(dec!(2000)),
+            "USD",
+        );
+
+        // One SPLIT activity per account for the same 2:1 event (as sync_splits produces)
+        let split1 = create_test_activity(
+            "split-acc1",
+            &acc1.id,
+            Some("AAPL"),
+            "SPLIT",
+            d2,
+            None,
+            None,
+            Some(dec!(2)),
+            "USD",
+        );
+        let split2 = create_test_activity(
+            "split-acc2",
+            &acc2.id,
+            Some("AAPL"),
+            "SPLIT",
+            d2,
+            None,
+            None,
+            Some(dec!(2)),
+            "USD",
+        );
+
+        let activity_repo = Arc::new(MockActivityRepositoryWithData::new(vec![
+            deposit1, buy1, deposit2, buy2, split1, split2,
+        ]));
+        let fx = Arc::new(MockFxService::new());
+        let snapshot_repo = Arc::new(MockSnapshotRepository::new());
+        let asset_repo = Arc::new(MockAssetRepository::new());
+
+        let svc = SnapshotService::new(
+            base,
+            Arc::new(account_repo),
+            activity_repo,
+            snapshot_repo.clone(),
+            asset_repo,
+            fx,
+        );
+
+        let _ = svc.calculate_holdings_snapshots(None).await.unwrap();
+
+        let frames = snapshot_repo.get_saved_snapshots();
+        let mut sorted = frames.clone();
+        sorted.sort_by_key(|s| s.snapshot_date);
+
+        // Each account should have 20 shares (10 * 2), not 40 (10 * 2 * 2)
+        let frame_d2: Vec<_> = sorted.iter().filter(|s| s.snapshot_date == d2).collect();
+        for frame in &frame_d2 {
+            if let Some(pos) = frame.positions.get("AAPL") {
+                assert_eq!(
+                    pos.quantity,
+                    dec!(20),
+                    "account {}: expected 20 shares after 2:1 split, got {} (double-counting?)",
+                    frame.account_id,
+                    pos.quantity
+                );
+            }
+        }
+    }
+
     // ==================== FX CONVERSION TESTS ====================
 
     #[tokio::test]

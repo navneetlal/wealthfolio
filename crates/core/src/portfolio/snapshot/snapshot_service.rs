@@ -1069,6 +1069,9 @@ impl SnapshotService {
         }
         for splits in split_factors.values_mut() {
             splits.sort_by_key(|k| k.0);
+            // Splits are stored per-account but are asset-level events; deduplicate by date
+            // so that assets held in multiple accounts don't over-apply the same split.
+            splits.dedup_by_key(|k| k.0);
         }
         split_factors
     }

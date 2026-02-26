@@ -65,6 +65,7 @@ pub mod resolver;
 pub use models::{
     AssetKind, AssetProfile, Coverage, Currency, InstrumentId, InstrumentKind, Mic, ProviderId,
     ProviderInstrument, ProviderOverrides, ProviderSymbol, Quote, QuoteContext, SearchResult,
+    SplitEvent,
 };
 
 // Re-export resolver types

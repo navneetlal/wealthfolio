@@ -18,7 +18,9 @@ use super::{
     CircuitBreaker, FetchDiagnostics, QuoteValidator, RateLimitConfig, RateLimiter, SkipReason,
 };
 use crate::errors::{MarketDataError, RetryClass};
-use crate::models::{AssetProfile, InstrumentId, ProviderId, Quote, QuoteContext, SearchResult};
+use crate::models::{
+    AssetProfile, InstrumentId, ProviderId, Quote, QuoteContext, SearchResult, SplitEvent,
+};
 use crate::provider::MarketDataProvider;
 use crate::resolver::SymbolResolver;
 
@@ -311,6 +313,43 @@ impl ProviderRegistry {
         }
 
         Err(last_error.unwrap_or(MarketDataError::AllProvidersFailed))
+    }
+
+    /// Fetch split history for an instrument.
+    ///
+    /// Tries providers in order. Returns empty vec (not error) if no provider supports splits.
+    pub async fn fetch_splits(
+        &self,
+        context: &QuoteContext,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Vec<SplitEvent> {
+        let providers = self.ordered_providers(context, true);
+
+        for provider in providers {
+            let provider_id: ProviderId = Cow::Borrowed(provider.id());
+
+            let resolved = match self.resolver.resolve(&provider_id, context) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+
+            self.rate_limiter.acquire(&provider_id).await;
+
+            match provider
+                .get_splits(context, resolved.instrument, start, end)
+                .await
+            {
+                Ok(splits) => return splits,
+                Err(MarketDataError::NotSupported { .. }) => continue,
+                Err(e) => {
+                    warn!("Split fetch failed for provider '{}': {:?}", provider_id, e);
+                    continue;
+                }
+            }
+        }
+
+        vec![]
     }
 
     /// Get providers ordered by preference for the given context.
