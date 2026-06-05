@@ -44,18 +44,18 @@ export function DisplayCode({ code, expiresAt, onCancel }: DisplayCodeProps) {
   const formattedCode = code.length > 3 ? `${code.slice(0, 3)} ${code.slice(3)}` : code;
 
   return (
-    <div className="flex flex-col items-center gap-5 pb-2">
+    <div className="flex flex-col items-center gap-4">
       {/* QR Code */}
-      <div className="rounded-xl bg-white p-2.5">
-        <QRCodeSVG value={code} size={140} level="M" marginSize={0} />
+      <div className="shadow-xs rounded-2xl bg-white p-3 ring-1 ring-black/5">
+        <QRCodeSVG value={code} size={128} level="M" marginSize={0} />
       </div>
 
       {/* Code + Copy - clickable row */}
       <button
         onClick={handleCopy}
-        className="bg-muted hover:bg-muted/80 flex items-center gap-3 rounded-lg px-4 py-2.5 transition-colors"
+        className="bg-muted hover:bg-muted/80 flex items-center gap-3 rounded-xl px-4 py-3 transition-colors"
       >
-        <code className="font-mono text-lg font-semibold tracking-[0.2em]">{formattedCode}</code>
+        <code className="font-mono text-base font-semibold tracking-[0.16em]">{formattedCode}</code>
         {copied ? (
           <Icons.Check className="h-4 w-4 text-green-500" />
         ) : (

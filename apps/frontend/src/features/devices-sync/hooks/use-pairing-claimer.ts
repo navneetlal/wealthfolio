@@ -41,6 +41,8 @@ export type ClaimerStep =
   | "success"
   | "error";
 
+export type PairingBootstrapState = "idle" | "active" | "failed";
+
 export function usePairingClaimer() {
   const queryClient = useQueryClient();
   const [phase, setPhase] = useState<ClaimerPhase>("idle");
@@ -111,6 +113,20 @@ export function usePairingClaimer() {
     }
     return null;
   }, [error, keyPoll.error, flowPoll.error]);
+
+  const bootstrapFlowState = useMemo<PairingBootstrapState>(() => {
+    if (phase === "error" && flowId !== null) {
+      return "failed";
+    }
+    if (
+      phase === "flow_active" ||
+      phase === "overwrite_required" ||
+      (flowId !== null && phase !== "idle")
+    ) {
+      return "active";
+    }
+    return "idle";
+  }, [flowId, phase]);
 
   const processFlowPhase = useCallback(
     (flowPhase: PairingFlowPhase) => {
@@ -257,6 +273,7 @@ export function usePairingClaimer() {
     sas: sasQuery.data ?? null,
     overwriteInfo,
     isApprovingOverwrite,
+    bootstrapFlowState,
     submitCode,
     approveOverwrite,
     cancel,

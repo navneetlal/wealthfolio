@@ -26,7 +26,7 @@ export function WaitingState({
   action,
 }: WaitingStateProps) {
   return (
-    <div className="flex flex-col items-center px-4 py-6">
+    <div className="flex flex-col items-center px-4 py-6 text-center">
       {showQRSkeleton ? (
         <div className="mb-6 flex flex-col items-center gap-4">
           {/* QR Code skeleton */}
@@ -53,26 +53,28 @@ export function WaitingState({
           )}
         </div>
       ) : (
-        <div className="mb-6 flex flex-col items-center gap-4">
+        <div className="mb-6 flex flex-col items-center gap-5">
           {!action && (
-            <div className="flex h-20 w-20 items-center justify-center rounded-full bg-blue-100 dark:bg-blue-900/30">
-              <Icons.Spinner className="h-8 w-8 animate-spin text-blue-600 dark:text-blue-400" />
+            <div className="bg-primary/10 text-primary flex h-20 w-20 items-center justify-center rounded-full">
+              <Icons.Spinner className="h-8 w-8 animate-spin" />
             </div>
           )}
           {action}
         </div>
       )}
 
-      <div className="mb-6 text-center">
-        <p className="text-foreground text-base font-semibold">{title}</p>
+      <div className="mb-6 space-y-2">
+        <p className="text-foreground text-lg font-semibold leading-none">{title}</p>
         {description ? (
-          <p className="text-muted-foreground mt-2 max-w-[240px] text-sm">{description}</p>
+          <p className="text-muted-foreground mx-auto max-w-[260px] text-sm leading-6">
+            {description}
+          </p>
         ) : securityCode ? (
-          <p className="text-muted-foreground mt-2 max-w-[240px] text-sm">
+          <p className="text-muted-foreground mx-auto max-w-[260px] text-sm leading-6">
             Confirm this code matches on your other device
           </p>
         ) : (
-          <p className="text-muted-foreground mt-2 max-w-[240px] text-sm">
+          <p className="text-muted-foreground mx-auto max-w-[260px] text-sm leading-6">
             Please wait while we securely connect your device
           </p>
         )}

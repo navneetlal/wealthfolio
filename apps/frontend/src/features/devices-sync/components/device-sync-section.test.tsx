@@ -225,7 +225,6 @@ describe("DeviceSyncSection", () => {
       vi.useRealTimers();
     }
   });
-
   it("discards a ready-state bootstrap result if pairing opens while the check is in flight", async () => {
     vi.useFakeTimers();
     try {

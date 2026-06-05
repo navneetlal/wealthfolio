@@ -61,12 +61,13 @@ import {
   useRevokeDevice,
   useSyncActions,
   useSyncStatus,
+  type PairingBootstrapState,
 } from "../hooks";
 import { syncService } from "../services/sync-service";
 import { SyncStates, type Device } from "../types";
 import { logSyncError, userFacingSyncErrorMessage } from "../utils/error-messages";
 import { E2EESetupCard } from "./e2ee-setup-card";
-import { PairingFlow, WaitingState, type PairingBootstrapState } from "./pairing-flow";
+import { PairingFlow, WaitingState } from "./pairing-flow";
 import { RecoveryDialog } from "./recovery-dialog";
 
 const PORTAL_DEVICES_URL = "https://connect.wealthfolio.app/settings/devices";
@@ -603,7 +604,7 @@ export function DeviceSyncSection() {
         {/* Pairing Dialog */}
         <Dialog open={isPairingOpen} onOpenChange={handlePairingDialogOpenChange}>
           <DialogContent
-            className="md:max-w-lg"
+            className="sm:max-w-[420px]"
             mobileClassName="pb-8"
             showCloseButton={false}
             onEscapeKeyDown={(e) => e.preventDefault()}
@@ -658,7 +659,7 @@ export function DeviceSyncSection() {
         {/* Pairing Dialog */}
         <Dialog open={isPairingOpen} onOpenChange={handlePairingDialogOpenChange}>
           <DialogContent
-            className="md:max-w-lg"
+            className="sm:max-w-[420px]"
             mobileClassName="pb-8"
             showCloseButton={false}
             onEscapeKeyDown={(e) => e.preventDefault()}
@@ -895,7 +896,7 @@ export function DeviceSyncSection() {
         {/* Pairing Dialog */}
         <Dialog open={isPairingOpen} onOpenChange={handleReadyPairingDialogOpenChange}>
           <DialogContent
-            className="md:max-w-lg"
+            className="sm:max-w-[420px]"
             mobileClassName="pb-8"
             showCloseButton={false}
             onEscapeKeyDown={(e) => e.preventDefault()}
@@ -961,6 +962,12 @@ export function DeviceSyncSection() {
               <AlertDialogDescription className="text-center text-sm">
                 Your local data will be replaced with data from your other connected device.
               </AlertDialogDescription>
+              {overwriteRisk && overwriteRisk.localRows > 0 && (
+                <p className="text-muted-foreground text-center text-xs">
+                  {overwriteRisk.localRows} local {overwriteRisk.localRows === 1 ? "row" : "rows"}{" "}
+                  will be replaced.
+                </p>
+              )}
             </AlertDialogHeader>
 
             <div className="flex flex-col gap-2 sm:flex-row sm:justify-center">
