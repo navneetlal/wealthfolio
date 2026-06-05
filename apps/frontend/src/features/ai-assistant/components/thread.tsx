@@ -53,8 +53,8 @@ export const Thread: FC<ThreadProps> = ({ composerActions }) => {
             }}
           />
           {/* Spacer to prevent last message from being hidden behind sticky composer + mobile nav */}
-          <div className="h-[calc(var(--mobile-nav-ui-height)+max(var(--mobile-nav-gap),env(safe-area-inset-bottom)))] shrink-0 md:h-0" />
-          <ThreadPrimitive.ViewportFooter className="aui-thread-viewport-footer bg-background max-w-(--thread-max-width) sticky bottom-[calc(var(--mobile-nav-ui-height)+max(var(--mobile-nav-gap),env(safe-area-inset-bottom)))] z-10 mx-auto mt-auto flex w-full flex-col gap-4 overflow-visible rounded-t-3xl pb-4 md:bottom-0 md:pb-6">
+          <div className="h-[var(--mobile-nav-total-offset)] shrink-0 md:h-0" />
+          <ThreadPrimitive.ViewportFooter className="aui-thread-viewport-footer bg-background max-w-(--thread-max-width) sticky bottom-[var(--mobile-nav-total-offset)] z-10 mx-auto mt-auto flex w-full flex-col gap-4 overflow-visible rounded-t-3xl pb-4 md:bottom-0 md:pb-6">
             <ThreadScrollToBottom />
             <Composer composerActions={composerActions} />
             <p className="text-muted-foreground/70 text-center text-xs">

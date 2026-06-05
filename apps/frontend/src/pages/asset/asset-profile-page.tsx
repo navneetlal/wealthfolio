@@ -1214,6 +1214,7 @@ export const AssetProfilePage = () => {
         {isAltAsset && altHolding && assetProfile ? (
           isMobile ? (
             <SwipableView
+              withMobileNavOffset
               items={[
                 {
                   name: "Overview",
@@ -1294,6 +1295,7 @@ export const AssetProfilePage = () => {
               </div>
             )}
             <SwipableView
+              withMobileNavOffset
               items={swipableTabs}
               displayToggle={true}
               onViewChange={(_index: number, name: string) => {

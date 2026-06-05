@@ -20,8 +20,7 @@ interface PageScrollContainerProps extends React.HTMLAttributes<HTMLDivElement> 
   withMobileNavOffset?: boolean;
 }
 
-const MOBILE_NAV_SCROLL_OFFSET =
-  "calc(var(--mobile-nav-ui-height) + max(var(--mobile-nav-gap), env(safe-area-inset-bottom)))";
+const MOBILE_NAV_SCROLL_OFFSET = "var(--mobile-nav-total-offset)";
 
 export const PageScrollContainer = React.forwardRef<HTMLDivElement, PageScrollContainerProps>(
   function PageScrollContainer({ className, children, withMobileNavOffset = false, style, ...props }, ref) {

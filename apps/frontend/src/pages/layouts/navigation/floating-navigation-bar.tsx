@@ -71,7 +71,7 @@ export function FloatingNavigationBar({ navigation }: FloatingNavigationBarProps
 
   return (
     <div className="pointer-events-none fixed inset-x-0 bottom-0 z-40">
-      <div className="flex justify-center px-4 pb-[max(var(--mobile-nav-gap),env(safe-area-inset-bottom))]">
+      <div className="flex justify-center px-4 pb-[var(--mobile-nav-bottom-offset)]">
         <LiquidGlass
           variant="floating"
           intensity="subtle"

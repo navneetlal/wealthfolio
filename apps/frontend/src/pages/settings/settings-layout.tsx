@@ -133,7 +133,7 @@ export default function SettingsLayout() {
 
   // Mobile-first: show list view on main page, detail view on specific pages
   return (
-    <ApplicationShell className="settings-root app-shell h-screen overflow-x-hidden">
+    <ApplicationShell className="settings-root app-shell h-screen overflow-x-hidden supports-[height:100dvh]:h-dvh">
       {/* Mobile Layout */}
       <div className="w-full lg:hidden">
         {isMainSettingsPage ? (
@@ -144,7 +144,7 @@ export default function SettingsLayout() {
                 <h1 className="text-lg font-semibold">Settings</h1>
               </div>
             </div>
-            <div className="space-y-6 p-3 pb-[calc(var(--mobile-nav-ui-height)+max(var(--mobile-nav-gap),env(safe-area-inset-bottom)))] lg:p-4 lg:pb-4">
+            <div className="space-y-6 p-3 pb-[var(--mobile-nav-total-offset)] lg:p-4 lg:pb-4">
               {sections.map((section) => (
                 <div key={section.title} className="space-y-3">
                   <div className="text-muted-foreground px-2 text-xs font-semibold uppercase tracking-widest">
@@ -182,7 +182,7 @@ export default function SettingsLayout() {
         ) : (
           <div className="scan-hide-target pt-safe w-full max-w-full overflow-x-hidden">
             <div className="w-full max-w-full overflow-x-hidden scroll-smooth">
-              <div className="p-2 pb-[calc(var(--mobile-nav-ui-height)+max(var(--mobile-nav-gap),env(safe-area-inset-bottom)))] lg:p-4 lg:pb-4">
+              <div className="p-2 pb-[var(--mobile-nav-total-offset)] lg:p-4 lg:pb-4">
                 <Outlet />
               </div>
             </div>

@@ -213,6 +213,7 @@ export function SwipableRoutesPage({
           <SwipableView
             items={swipableItems}
             displayToggle={false}
+            withMobileNavOffset
             onViewChange={handleSwipe}
             onInit={(api) => {
               if (api) {

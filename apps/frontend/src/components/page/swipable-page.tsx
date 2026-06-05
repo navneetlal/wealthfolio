@@ -21,6 +21,7 @@ interface SwipablePageProps {
   className?: string;
   contentClassName?: string;
   withPadding?: boolean;
+  withMobileNavOffset?: boolean;
   title?: string;
   /**
    * When set, the most recently selected view is remembered in localStorage
@@ -144,6 +145,7 @@ export function SwipablePage({
   className,
   contentClassName,
   withPadding = true,
+  withMobileNavOffset = true,
   title,
   persistKey,
 }: SwipablePageProps) {
@@ -236,9 +238,8 @@ export function SwipablePage({
                   content: (
                     <div
                       className={cn(
-                        withPadding
-                          ? "p-2 pb-[calc(var(--mobile-nav-ui-height)+max(var(--mobile-nav-gap),env(safe-area-inset-bottom)))]"
-                          : "pb-safe",
+                        withPadding ? "p-2" : "pb-safe",
+                        withMobileNavOffset && "pb-[var(--mobile-nav-total-offset)]",
                       )}
                     >
                       {v.content}

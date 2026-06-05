@@ -25,6 +25,7 @@ export interface SwipableViewItem {
 export interface SwipableViewProps {
   items: SwipableViewItem[];
   displayToggle?: boolean;
+  withMobileNavOffset?: boolean;
   className?: string;
   dotClassName?: string;
   labelClassName?: string;
@@ -44,6 +45,7 @@ export interface SwipableViewProps {
 export function SwipableView({
   items,
   displayToggle = false,
+  withMobileNavOffset = false,
   className,
   dotClassName,
   labelClassName,
@@ -178,7 +180,12 @@ export function SwipableView({
                  2. This ensures the Header stays fixed while content scrolls.
                  3. touch-pan-y allows vertical scrolling while horizontal swipes trigger the carousel.
                */}
-              <div className="h-full w-full overflow-y-auto overflow-x-hidden">
+              <div
+                className={cn(
+                  "h-full w-full overflow-y-auto overflow-x-hidden",
+                  withMobileNavOffset && "scroll-pb-nav pb-[var(--mobile-nav-total-offset)]",
+                )}
+              >
                 {shouldRender(index) ? (
                   item.content
                 ) : (

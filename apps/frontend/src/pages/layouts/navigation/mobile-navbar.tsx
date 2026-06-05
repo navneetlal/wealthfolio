@@ -80,7 +80,7 @@ export function MobileNavBar({ navigation }: MobileNavBarProps) {
   return (
     <div className={containerClassName}>
       {/* Lift off bottom by the design gap while respecting safe area */}
-      <div className="flex justify-center px-4 pb-[max(var(--mobile-nav-gap),env(safe-area-inset-bottom))]">
+      <div className="flex justify-center px-4 pb-[var(--mobile-nav-bottom-offset)]">
         <LiquidGlass
           variant="floating"
           intensity="subtle"

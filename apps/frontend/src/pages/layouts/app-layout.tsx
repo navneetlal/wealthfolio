@@ -42,7 +42,7 @@ const AppLayoutContent = () => {
   if (!isSettingsReady) {
     return (
       <div
-        className="flex h-screen items-center justify-center"
+        className="flex h-screen items-center justify-center supports-[height:100dvh]:h-dvh"
         style={{ backgroundColor: "#09090b" }}
       >
         <img src="/logo-gold.png" alt="Wealthfolio" className="h-[100px] w-auto" />
@@ -57,7 +57,7 @@ const AppLayoutContent = () => {
   return (
     <ErrorBoundary>
       <ApplicationShell
-        className="app-shell h-screen overflow-x-hidden"
+        className="app-shell h-screen overflow-x-hidden supports-[height:100dvh]:h-dvh"
         style={
           launchBarHeight ? { ["--mobile-nav-ui-height" as string]: launchBarHeight } : undefined
         }

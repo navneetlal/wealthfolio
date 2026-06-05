@@ -456,6 +456,8 @@
 
   --mobile-nav-ui-height: 64px; /* nav bar height */
   --mobile-nav-gap: 12px; /* space between nav and bottom */
+  --mobile-nav-bottom-offset: max(var(--mobile-nav-gap), env(safe-area-inset-bottom));
+  --mobile-nav-total-offset: calc(var(--mobile-nav-ui-height) + var(--mobile-nav-bottom-offset));
 
   /* Sonner toast overrides - solid backgrounds for better readability */
   --toast-bg: hsl(var(--flexoki-bg-2));
@@ -666,9 +668,7 @@ body.qr-scan-active .scan-hide-target {
   [data-page-scroll-container][data-with-mobile-nav-offset="true"]
     [data-page-content="true"]
     > :last-child {
-    padding-bottom: calc(
-      var(--mobile-nav-ui-height) + max(var(--mobile-nav-gap), env(safe-area-inset-bottom))
-    ) !important;
+    padding-bottom: var(--mobile-nav-total-offset) !important;
   }
 
   .touch-manipulation {
@@ -710,7 +710,7 @@ body.qr-scan-active .scan-hide-target {
 
   /* Scroll-to/focus targets stop above the floating nav */
   .scroll-pb-nav {
-    scroll-padding-bottom: calc(var(--mobile-nav-ui-height) + var(--mobile-nav-gap));
+    scroll-padding-bottom: var(--mobile-nav-total-offset);
   }
 
   /* Scroll-to/focus targets stop below sticky headers (typically ~72px) */
