@@ -60,6 +60,78 @@ describe("getAutomaticHistoryChartScale", () => {
     expect(scale.domain).toEqual([0, 2300]);
   });
 
+  it("fits visible values without zero anchoring when requested", () => {
+    const scale = getAutomaticHistoryChartScale(
+      [
+        { totalValue: 2000, netContribution: 0 },
+        { totalValue: 1500, netContribution: 0 },
+        { totalValue: 2000, netContribution: 0 },
+      ],
+      { mode: "fit-visible" },
+    );
+
+    expect(scale.scale).toBe("linear");
+    expect(scale.showNetContribution).toBe(false);
+    expect(scale.domain[0]).toBeCloseTo(1425);
+    expect(scale.domain[1]).toBeCloseTo(2020);
+  });
+
+  it("biases fit-visible padding below the data to reduce empty headroom", () => {
+    const scale = getAutomaticHistoryChartScale(
+      [
+        { totalValue: 1500, netContribution: 0 },
+        { totalValue: 2000, netContribution: 0 },
+      ],
+      { mode: "fit-visible" },
+    );
+
+    expect(1500 - scale.domain[0]).toBeGreaterThan(scale.domain[1] - 2000);
+  });
+
+  it("keeps fit-visible periods calmer when a minimum domain span ratio is provided", () => {
+    const scale = getAutomaticHistoryChartScale(
+      [
+        { totalValue: 90, netContribution: 0 },
+        { totalValue: 100, netContribution: 0 },
+      ],
+      { mode: "fit-visible", minDomainSpanRatio: 0.2 },
+    );
+
+    expect(scale.scale).toBe("linear");
+    expect(scale.domain[1] - scale.domain[0]).toBeCloseTo(19);
+  });
+
+  it("expands fit-visible scale to show net contribution when the span stays reasonable", () => {
+    const scale = getAutomaticHistoryChartScale(
+      [
+        { totalValue: 650_000, netContribution: 531_202.07 },
+        { totalValue: 706_926.56, netContribution: 531_202.07 },
+        { totalValue: 690_000, netContribution: 531_202.07 },
+      ],
+      { mode: "fit-visible", netContributionMaxDomainSpanRatio: 5 },
+    );
+
+    expect(scale.scale).toBe("linear");
+    expect(scale.showNetContribution).toBe(true);
+    expect(scale.domain[0]).toBeLessThan(531_202.07);
+    expect(scale.domain[1]).toBeGreaterThan(706_926.56);
+  });
+
+  it("keeps net contribution hidden when including it would flatten fit-visible data", () => {
+    const scale = getAutomaticHistoryChartScale(
+      [
+        { totalValue: 700_000, netContribution: 531_202.07 },
+        { totalValue: 706_926.56, netContribution: 531_202.07 },
+        { totalValue: 704_000, netContribution: 531_202.07 },
+      ],
+      { mode: "fit-visible", netContributionMaxDomainSpanRatio: 5 },
+    );
+
+    expect(scale.scale).toBe("linear");
+    expect(scale.showNetContribution).toBe(false);
+    expect(scale.domain[0]).toBeGreaterThan(531_202.07);
+  });
+
   it("keeps high-value low-volatility periods readable", () => {
     const scale = getAutomaticHistoryChartScale([
       { totalValue: 1_021_150, netContribution: 1_000_000 },

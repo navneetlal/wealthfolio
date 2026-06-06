@@ -29,6 +29,46 @@ import TopHoldings from "./top-holdings";
 const DEFAULT_INTERVAL: UITimePeriod = "3M";
 const INTERVAL_STORAGE_KEY = "dashboard-interval";
 
+function getDashboardChartMinDomainSpanRatio(period: UITimePeriod): number {
+  switch (period) {
+    case "1D":
+    case "1W":
+      return 0.035;
+    case "1M":
+    case "3M":
+      return 0.08;
+    case "6M":
+    case "YTD":
+    case "1Y":
+      return 0.16;
+    case "5Y":
+    case "ALL":
+      return 0.2;
+    default:
+      return 0.12;
+  }
+}
+
+function getDashboardNetContributionMaxDomainSpanRatio(period: UITimePeriod): number | undefined {
+  switch (period) {
+    case "1D":
+    case "1W":
+      return undefined;
+    case "1M":
+    case "3M":
+      return 1.4;
+    case "6M":
+    case "YTD":
+    case "1Y":
+      return 2.2;
+    case "5Y":
+    case "ALL":
+      return 2.8;
+    default:
+      return 1.8;
+  }
+}
+
 export function DashboardContent() {
   // Use the same persisted state as IntervalSelector for the interval code
   const [intervalCode] = usePersistentState<UITimePeriod>(INTERVAL_STORAGE_KEY, DEFAULT_INTERVAL);
@@ -40,6 +80,7 @@ export function DashboardContent() {
   const [selectedIntervalDescription, setSelectedIntervalDescription] = useState<string>(
     () => getInitialIntervalData(intervalCode).description,
   );
+  const [selectedInterval, setSelectedInterval] = useState<UITimePeriod>(() => intervalCode);
   const [isAllTime, setIsAllTime] = useState<boolean>(() => intervalCode === "ALL");
 
   const { holdings: allHoldings, isLoading: isHoldingsLoading } = useHoldings({ type: "all" });
@@ -126,6 +167,15 @@ export function DashboardContent() {
     );
   }, [valuationHistory, baseCurrency]);
 
+  const chartMinDomainSpanRatio = useMemo(
+    () => getDashboardChartMinDomainSpanRatio(selectedInterval),
+    [selectedInterval],
+  );
+  const chartNetContributionMaxDomainSpanRatio = useMemo(
+    () => getDashboardNetContributionMaxDomainSpanRatio(selectedInterval),
+    [selectedInterval],
+  );
+
   const isNegative = totalValue < 0;
 
   // Callback for IntervalSelector
@@ -134,6 +184,7 @@ export function DashboardContent() {
     description: string,
     range: DateRange | undefined,
   ) => {
+    setSelectedInterval(code);
     setSelectedIntervalDescription(description);
     setDateRange(range);
     setIsAllTime(code === "ALL");
@@ -141,7 +192,7 @@ export function DashboardContent() {
 
   return (
     <div className="flex min-h-full flex-col">
-      <div className="px-4 pb-1 pt-2 md:px-6 md:pb-2 lg:px-8">
+      <div className="px-4 pb-1 pt-2 md:px-6 lg:px-8">
         <PortfolioUpdateTrigger
           lastCalculatedAt={currentValuation?.calculatedAt}
           notices={performanceMessages}
@@ -208,9 +259,15 @@ export function DashboardContent() {
         }`}
       >
         <div className="h-[280px]">
-          <HistoryChart data={chartData} isLoading={isValuationHistoryLoading} />
+          <HistoryChart
+            data={chartData}
+            isLoading={isValuationHistoryLoading}
+            scaleMode="fit-visible"
+            minDomainSpanRatio={chartMinDomainSpanRatio}
+            netContributionMaxDomainSpanRatio={chartNetContributionMaxDomainSpanRatio}
+          />
           {valuationHistory && chartData.length > 0 && (
-            <div className="flex w-full justify-center">
+            <div className="flex w-full -translate-y-6 justify-center">
               <IntervalSelector
                 className="pointer-events-auto relative z-20 w-full max-w-screen-sm sm:max-w-screen-md md:max-w-2xl lg:max-w-3xl"
                 onIntervalSelect={handleIntervalSelect}

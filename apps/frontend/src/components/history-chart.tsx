@@ -13,7 +13,10 @@ import {
   type RechartsActiveDotProps,
   type RechartsMarkerShapeProps,
 } from "./history-chart-marker";
-import { getAutomaticHistoryChartScale } from "./history-chart-scale";
+import {
+  getAutomaticHistoryChartScale,
+  type HistoryChartScaleMode,
+} from "./history-chart-scale";
 
 const CHART_SCRUB_HAPTIC_INTERVAL_MS = 80;
 
@@ -33,6 +36,12 @@ interface HistoryChartProps {
   showMarkers?: boolean;
   /** Callback when a marker is clicked */
   onMarkerClick?: (date: string) => void;
+  /** Controls how the Y-axis domain is calculated. */
+  scaleMode?: HistoryChartScaleMode;
+  /** Expands the domain to show net contribution when the widened span stays under this ratio. */
+  netContributionMaxDomainSpanRatio?: number;
+  /** Keeps narrow ranges from zooming too aggressively. Ratio is relative to the visible center. */
+  minDomainSpanRatio?: number;
 }
 
 interface TooltipEntry {
@@ -122,6 +131,9 @@ export function HistoryChart({
   snapshotDates,
   showMarkers,
   onMarkerClick,
+  scaleMode,
+  netContributionMaxDomainSpanRatio,
+  minDomainSpanRatio,
 }: HistoryChartProps) {
   const { triggerHaptic } = useHapticFeedback();
   const { isBalanceHidden } = useBalancePrivacy();
@@ -134,7 +146,17 @@ export function HistoryChart({
   const id = useId();
   const fillGradientId = `historyFill-${id}`;
   const strokeGradientId = `historyStroke-${id}`;
-  const scaleConfig = useMemo(() => getAutomaticHistoryChartScale(data), [data]);
+  const scaleConfig = useMemo(
+    () =>
+      getAutomaticHistoryChartScale(data, {
+        ...(scaleMode ? { mode: scaleMode } : {}),
+        ...(netContributionMaxDomainSpanRatio === undefined
+          ? {}
+          : { netContributionMaxDomainSpanRatio }),
+        ...(minDomainSpanRatio === undefined ? {} : { minDomainSpanRatio }),
+      }),
+    [data, scaleMode, netContributionMaxDomainSpanRatio, minDomainSpanRatio],
+  );
 
   const chartConfig = {
     totalValue: {
