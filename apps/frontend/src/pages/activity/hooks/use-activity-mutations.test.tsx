@@ -121,4 +121,33 @@ describe("useActivityMutations", () => {
       }),
     );
   });
+
+  it("does not copy derived amounts when duplicating price-bearing activities", async () => {
+    const { result } = renderHook(() => useActivityMutations(), { wrapper: createWrapper() });
+
+    await act(async () => {
+      await result.current.duplicateActivityMutation.mutateAsync({
+        id: "activity-1",
+        accountId: "acc-1",
+        activityType: "BUY",
+        date: "2026-04-30T16:00:00Z",
+        assetId: "asset-aapl",
+        assetSymbol: "AAPL",
+        exchangeMic: "XNAS",
+        quantity: 2,
+        unitPrice: 100,
+        amount: 200,
+        fee: 0,
+        currency: "USD",
+      } as any);
+    });
+
+    expect(adapterMocks.createActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        amount: undefined,
+        quantity: 2,
+        unitPrice: 100,
+      }),
+    );
+  });
 });

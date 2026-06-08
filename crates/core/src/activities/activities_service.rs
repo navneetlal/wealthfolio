@@ -173,7 +173,51 @@ impl ActivityService {
             amount,
         )?;
 
+        if Self::should_clear_stale_price_bearing_amount(activity, existing) {
+            activity.amount = Some(None);
+        }
+
         Ok(())
+    }
+
+    fn should_clear_stale_price_bearing_amount(
+        activity: &ActivityUpdate,
+        existing: &Activity,
+    ) -> bool {
+        if activity.amount.is_some()
+            || !PRICE_BEARING_ACTIVITY_TYPES.contains(&activity.activity_type.as_str())
+        {
+            return false;
+        }
+
+        let asset_id = activity.get_symbol_id().or(existing.asset_id.as_deref());
+        if activity.activity_type == ACTIVITY_TYPE_TRANSFER_IN
+            && !is_securities_transfer(&activity.activity_type, asset_id)
+        {
+            return false;
+        }
+
+        let effective_quantity = activity.quantity.unwrap_or(existing.quantity);
+        let effective_unit_price = activity.unit_price.unwrap_or(existing.unit_price);
+        if effective_quantity.is_none_or(|quantity| quantity.is_zero())
+            || effective_unit_price.is_none_or(|unit_price| unit_price.is_zero())
+        {
+            return false;
+        }
+
+        activity.account_id != existing.account_id
+            || !activity.currency.eq_ignore_ascii_case(&existing.currency)
+            || Self::decimal_patch_changes(activity.quantity, existing.quantity)
+            || Self::decimal_patch_changes(activity.unit_price, existing.unit_price)
+            || Self::decimal_patch_changes(activity.fee, existing.fee)
+            || Self::decimal_patch_changes(activity.fx_rate, existing.fx_rate)
+    }
+
+    fn decimal_patch_changes(patch: Option<Option<Decimal>>, existing: Option<Decimal>) -> bool {
+        match patch {
+            None => false,
+            Some(value) => value.map(|d| d.abs()) != existing.map(|d| d.abs()),
+        }
     }
 
     fn validate_new_activity_income_values(activity: &NewActivity) -> Result<()> {

@@ -19,6 +19,7 @@ import {
   InternalTransferPairRequest,
   InternalTransferPairResponse,
 } from "@/lib/types";
+import { isSecuritiesTransfer } from "@/lib/activity-utils";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { NewActivityFormValues } from "../components/forms/schemas";
@@ -334,6 +335,10 @@ export function useActivityMutations(
       assetQuoteMode,
       ...restOfActivityData
     } = activityToDuplicate;
+    const shouldCopyAmount =
+      restOfActivityData.activityType !== "BUY" &&
+      restOfActivityData.activityType !== "SELL" &&
+      !isSecuritiesTransfer(restOfActivityData.activityType, assetSymbol, _assetId);
 
     // For duplicating, use nested asset object
     const createPayload: ActivityCreate = {
@@ -344,7 +349,7 @@ export function useActivityMutations(
       currency: restOfActivityData.currency,
       quantity: restOfActivityData.quantity,
       unitPrice: restOfActivityData.unitPrice,
-      amount: restOfActivityData.amount,
+      amount: shouldCopyAmount ? restOfActivityData.amount : undefined,
       fee: restOfActivityData.fee,
       fxRate: restOfActivityData.fxRate ?? undefined,
       activityDate: date,

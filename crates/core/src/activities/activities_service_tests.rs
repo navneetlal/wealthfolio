@@ -1745,6 +1745,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_update_price_bearing_activity_clears_stale_amount_when_account_changes() {
+        let account_service = Arc::new(MockAccountService::new());
+        let asset_service = Arc::new(MockAssetService::new());
+        let fx_service = Arc::new(MockFxService::new());
+        let activity_repository = Arc::new(MockActivityRepository::new());
+
+        account_service.add_account(create_test_account("acc-usd", "USD"));
+        account_service.add_account(create_test_account("acc-cad", "CAD"));
+        asset_service.add_asset(create_test_asset_with_instrument(
+            "asset-aapl",
+            "AAPL",
+            Some("XNAS"),
+            Some(InstrumentType::Equity),
+            "USD",
+        ));
+
+        let mut existing = create_stored_activity("activity-1", "acc-usd", Some("asset-aapl"));
+        existing.amount = Some(dec!(100));
+        existing.quantity = Some(dec!(1));
+        existing.unit_price = Some(dec!(100));
+        existing.currency = "USD".to_string();
+        activity_repository
+            .activities
+            .lock()
+            .unwrap()
+            .push(existing);
+
+        let quote_service = Arc::new(MockQuoteService);
+        let activity_service = ActivityService::new(
+            activity_repository,
+            account_service,
+            asset_service,
+            fx_service,
+            quote_service,
+        );
+
+        let updated = activity_service
+            .update_activity(ActivityUpdate {
+                id: "activity-1".to_string(),
+                account_id: "acc-cad".to_string(),
+                asset: Some(AssetResolutionInput {
+                    id: Some("asset-aapl".to_string()),
+                    ..Default::default()
+                }),
+                activity_type: "BUY".to_string(),
+                subtype: None,
+                activity_date: "2024-01-15".to_string(),
+                quantity: Some(Some(dec!(2))),
+                unit_price: Some(Some(dec!(70))),
+                currency: "CAD".to_string(),
+                fee: Some(Some(dec!(0))),
+                amount: None,
+                status: None,
+                notes: None,
+                fx_rate: None,
+                metadata: None,
+            })
+            .await
+            .expect("update should succeed");
+
+        assert_eq!(updated.account_id, "acc-cad");
+        assert_eq!(updated.amount, None);
+        assert_eq!(updated.quantity, Some(dec!(2)));
+        assert_eq!(updated.unit_price, Some(dec!(70)));
+    }
+
+    #[tokio::test]
     async fn test_create_split_rejects_missing_amount_ratio() {
         let account_service = Arc::new(MockAccountService::new());
         let asset_service = Arc::new(MockAssetService::new());
