@@ -84,8 +84,8 @@ pub struct ProposeCategoriesArgs {
     pub limit: Option<u32>,
     /// Agent-inferred categories for the unproposed rows. The agent must fill this
     /// after calling `list_categorization_context` — there is no other way for an
-    /// AI-inferred category to reach the widget. Don't leave this empty when the
-    /// context call returned `needsAiJudgement > 0`.
+    /// AI-inferred category to reach the widget. Use an empty array only when the
+    /// context call returned `needsAiJudgement == 0`.
     #[serde(default)]
     pub ai_proposals: Option<Vec<AiProposal>>,
 }
@@ -226,11 +226,13 @@ impl<E: AiEnvironment + 'static> Tool for ProposeCategoriesTool<E> {
             description:
                 "Render the categorization widget for the user to review and confirm. Run \
                  `list_categorization_context` FIRST to see the taxonomies, recent few-shot \
-                 examples, and the unproposed rows; reason about each unproposed row, then \
-                 call this tool with `aiProposals` filled in. The tool runs deterministic \
-                 rule + same-payee history matches, merges your `aiProposals` for the rows \
-                 those passes didn't cover, and renders the widget. Do NOT pass `accountIds` \
-                 for generic mentions like 'credit card' or 'this account'."
+                 examples, and the unproposed rows. If `needsAiJudgement` is 0 and total is > 0, \
+                 still call this tool with `aiProposals: []` so the rule/history draft proposals \
+                 appear in the review widget. Otherwise reason about each unproposed row, then \
+                 call this tool with `aiProposals` filled in. The tool runs deterministic rule + \
+                 same-payee history matches, merges your `aiProposals` for the rows those passes \
+                 didn't cover, and renders the widget. Do NOT pass `accountIds` for generic \
+                 mentions like 'credit card' or 'this account'."
                     .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -260,7 +262,7 @@ impl<E: AiEnvironment + 'static> Tool for ProposeCategoriesTool<E> {
                     },
                     "aiProposals": {
                         "type": "array",
-                        "description": "Your inferred categories for the rows returned as `unproposed` from `list_categorization_context`. Each entry: { activityId, taxonomyId, categoryKey, confidence (0–1), reason }.",
+                        "description": "Your inferred categories for the rows returned as `unproposed` from `list_categorization_context`. Pass [] only when that context result returned needsAiJudgement = 0. Each entry: { activityId, taxonomyId, categoryKey, confidence (0–1), reason }.",
                         "items": {
                             "type": "object",
                             "properties": {

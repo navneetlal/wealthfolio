@@ -108,3 +108,16 @@ fn asset_classification_ambiguity_requires_user_choice() {
     assert!(SYSTEM_PROMPT.contains("get_asset_taxonomy_assignments"));
     assert!(lower.contains("do not call `list_asset_taxonomies` or `prepare_asset_classification`"));
 }
+
+#[test]
+fn categorization_context_still_requires_review_widget() {
+    let lower = SYSTEM_PROMPT.to_lowercase();
+    assert!(lower.contains("list_categorization_context.summary.total > 0"));
+    assert!(lower.contains("always follow it with `propose_transaction_categories`"));
+    assert!(lower.contains("aiproposals: []"));
+    assert!(lower.contains("rules/history matches are still only draft proposals"));
+    assert!(
+        lower.contains("never say transactions were categorized automatically"),
+        "system prompt should prevent treating context-only deterministic matches as applied",
+    );
+}

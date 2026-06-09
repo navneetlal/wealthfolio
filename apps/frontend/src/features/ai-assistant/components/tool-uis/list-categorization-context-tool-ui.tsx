@@ -26,8 +26,8 @@ function ListCategorizationContextContentImpl({ result, status }: Props) {
     <div className="text-muted-foreground flex items-center gap-2 px-1 text-xs">
       <Icons.Sparkles className="h-3 w-3" />
       <span>
-        Loaded context · {total} transactions · {deterministicallyProposed} matched by rules/history
-        · {needsAiJudgement} need AI judgement
+        Loaded context · {total} transactions · {deterministicallyProposed} rule/history draft
+        matches · {needsAiJudgement} need AI judgement
       </span>
     </div>
   );

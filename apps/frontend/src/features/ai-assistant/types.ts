@@ -667,6 +667,7 @@ export interface ListCategorizationContextOutput {
     deterministicallyProposed: number;
     needsAiJudgement: number;
   };
+  nextStep?: string;
 }
 
 export interface ProposeCategoryOption {

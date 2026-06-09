@@ -2,8 +2,8 @@
 //!
 //! Returns the data the agent needs to reason about uncategorized rows:
 //! taxonomies, recent few-shot examples, and the list of rows that need
-//! AI/manual judgement (already filtered by rules + same-payee history). The
-//! widget for this tool is a one-line compact summary; the full review widget
+//! AI/manual judgement (already filtered by rules + same-payee history). Rows
+//! matched by rules/history are still draft proposals; the full review widget
 //! comes from `propose_transaction_categories`.
 
 use log::debug;
@@ -33,8 +33,9 @@ pub struct ListCategorizationContextArgs {
 #[serde(rename_all = "camelCase")]
 pub struct ContextSummary {
     pub total: usize,
-    /// Rows already covered by rules or same-payee history. Agent doesn't need
-    /// to propose for these — included only so it knows the count.
+    /// Rows pre-matched by rules or same-payee history. The agent doesn't need
+    /// AI proposals for these, but they are not applied until the review widget
+    /// is rendered and confirmed.
     pub deterministically_proposed: usize,
     /// Rows the agent should propose categories for via
     /// `propose_transaction_categories(aiProposals: [...])`.
@@ -51,6 +52,10 @@ pub struct ListCategorizationContextOutput {
     /// Rows the agent should infer categories for.
     pub unproposed: Vec<UnproposedActivity>,
     pub summary: ContextSummary,
+    /// Instructional state for the chat agent. This is intentionally explicit
+    /// because "0 need AI judgement" still requires a proposal widget when
+    /// deterministic rule/history matches exist.
+    pub next_step: String,
 }
 
 pub struct ListCategorizationContextTool<E: AiEnvironment> {
@@ -84,12 +89,14 @@ impl<E: AiEnvironment + 'static> Tool for ListCategorizationContextTool<E> {
             description:
                 "Prerequisite for `propose_transaction_categories`. Returns the activity-scope \
                  taxonomies, recent few-shot examples, and the list of cash transactions that \
-                 need AI categorization (rows already covered by rules or same-payee history \
-                 are excluded). After receiving this result, reason about each row in \
-                 `unproposed`, infer the best `taxonomyId` + `categoryKey` pair from \
-                 `taxonomies` using `examples` + merchant-name knowledge, then call \
-                 `propose_transaction_categories` with `aiProposals` filled in (and the SAME \
-                 filters) to render the review widget. \
+                 need AI categorization (rows pre-matched by rules or same-payee history \
+                 are excluded from `unproposed` but are NOT applied). After receiving this result, \
+                 call `propose_transaction_categories` with the SAME filters to render the review \
+                 widget whenever `summary.total > 0`. If `unproposed` is empty / \
+                 `needsAiJudgement` is 0, call it with `aiProposals: []`; otherwise infer the best \
+                 `taxonomyId` + `categoryKey` pair for each `unproposed` row from `taxonomies` \
+                 using `examples` + merchant-name knowledge, then pass those as `aiProposals`. \
+                 Never tell the user categories were applied from this context result alone. \
                  Do NOT pass `accountIds` for generic mentions like 'credit card' — the \
                  spending settings already restrict to opted-in accounts."
                     .to_string(),
@@ -145,12 +152,30 @@ impl<E: AiEnvironment + 'static> Tool for ListCategorizationContextTool<E> {
             deterministically_proposed: state.proposals.len(),
             needs_ai_judgement: state.unproposed.len(),
         };
+        let next_step = next_step_instruction(&summary);
 
         Ok(ListCategorizationContextOutput {
             taxonomies: state.taxonomies,
             examples: state.examples,
             unproposed: state.unproposed,
             summary,
+            next_step,
         })
     }
+}
+
+fn next_step_instruction(summary: &ContextSummary) -> String {
+    if summary.total == 0 {
+        return "No matching transactions were found; there is no categorization widget to render."
+            .to_string();
+    }
+
+    if summary.needs_ai_judgement == 0 {
+        return "Call propose_transaction_categories with aiProposals: [] and the same filters to render the review widget. Rule/history matches are draft proposals, not applied categories.".to_string();
+    }
+
+    format!(
+        "Infer categories for the {} unproposed row(s), then call propose_transaction_categories with those aiProposals and the same filters to render the review widget.",
+        summary.needs_ai_judgement
+    )
 }

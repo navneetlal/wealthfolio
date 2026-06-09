@@ -128,3 +128,20 @@ schema_test!(snapshot_record_activity, RecordActivityTool::new(env()));
 schema_test!(snapshot_record_activities, RecordActivitiesTool::new(env()));
 schema_test!(snapshot_import_csv, ImportCsvTool::new(env(), "USD".into()));
 schema_test!(snapshot_get_health_status, GetHealthStatusTool::new(env()));
+
+#[tokio::test]
+async fn categorization_tool_descriptions_require_widget_for_deterministic_matches() {
+    let list_def = ListCategorizationContextTool::new(env())
+        .definition(String::new())
+        .await;
+    let propose_def = ProposeCategoriesTool::new(env())
+        .definition(String::new())
+        .await;
+
+    assert!(list_def.description.contains("summary.total > 0"));
+    assert!(list_def.description.contains("aiProposals: []"));
+    assert!(list_def.description.contains("NOT applied"));
+    assert!(propose_def.description.contains("needsAiJudgement"));
+    assert!(propose_def.description.contains("aiProposals: []"));
+    assert!(propose_def.description.contains("review widget"));
+}
