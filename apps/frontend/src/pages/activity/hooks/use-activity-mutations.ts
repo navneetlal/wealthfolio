@@ -20,6 +20,7 @@ import {
   InternalTransferPairResponse,
 } from "@/lib/types";
 import { isSecuritiesTransfer } from "@/lib/activity-utils";
+import { ActivityType, InstrumentType } from "@/lib/constants";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { NewActivityFormValues } from "../components/forms/schemas";
@@ -335,10 +336,15 @@ export function useActivityMutations(
       assetQuoteMode,
       ...restOfActivityData
     } = activityToDuplicate;
+    const isBuyOrSell =
+      restOfActivityData.activityType === ActivityType.BUY ||
+      restOfActivityData.activityType === ActivityType.SELL;
+    const isBondTrade =
+      isBuyOrSell && activityToDuplicate.instrumentType?.toUpperCase() === InstrumentType.BOND;
     const shouldCopyAmount =
-      restOfActivityData.activityType !== "BUY" &&
-      restOfActivityData.activityType !== "SELL" &&
-      !isSecuritiesTransfer(restOfActivityData.activityType, assetSymbol, _assetId);
+      isBondTrade ||
+      (!isBuyOrSell &&
+        !isSecuritiesTransfer(restOfActivityData.activityType, assetSymbol, _assetId));
 
     // For duplicating, use nested asset object
     const createPayload: ActivityCreate = {

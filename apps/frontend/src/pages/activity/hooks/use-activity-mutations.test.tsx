@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ActivityDetails } from "@/lib/types";
 import { useActivityMutations } from "./use-activity-mutations";
 
 const adapterMocks = vi.hoisted(() => ({
@@ -147,6 +148,43 @@ describe("useActivityMutations", () => {
         amount: undefined,
         quantity: 2,
         unitPrice: 100,
+      }),
+    );
+  });
+
+  it("copies bond trade amounts when duplicating price-bearing activities", async () => {
+    const { result } = renderHook(() => useActivityMutations(), { wrapper: createWrapper() });
+    const bondBuyActivity: ActivityDetails = {
+      id: "activity-1",
+      accountId: "acc-1",
+      accountName: "Taxable",
+      accountCurrency: "CAD",
+      activityType: "BUY",
+      date: new Date("2026-04-30T16:00:00Z"),
+      assetId: "asset-bond",
+      assetSymbol: "CA135087Q988",
+      assetName: "Canada Bond",
+      exchangeMic: "XTSE",
+      instrumentType: "BOND",
+      quantity: "1000",
+      unitPrice: "99",
+      amount: "990",
+      fee: "0",
+      currency: "CAD",
+      needsReview: false,
+      createdAt: new Date("2026-04-30T16:00:00Z"),
+      updatedAt: new Date("2026-04-30T16:00:00Z"),
+    };
+
+    await act(async () => {
+      await result.current.duplicateActivityMutation.mutateAsync(bondBuyActivity);
+    });
+
+    expect(adapterMocks.createActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        amount: "990",
+        quantity: "1000",
+        unitPrice: "99",
       }),
     );
   });
