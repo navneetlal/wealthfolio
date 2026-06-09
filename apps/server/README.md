@@ -32,7 +32,9 @@ Key environment variables
   Use `printf` instead of `echo -n` to avoid hidden newline issues.
   For Docker Compose `.env`/`--env-file`, single-quote the value or double every `$`;
   for YAML inline values, double every `$` in the hash (`$$argon2id$$...`).
-  When unset, authentication is disabled.
+  When unset, authentication is not configured. The server refuses to start on non-loopback
+  addresses without authentication unless `WF_AUTH_REQUIRED=false` is set; for local no-auth use
+  `WF_LISTEN_ADDR=127.0.0.1:8088`.
 - `WF_AUTH_TOKEN_TTL_MINUTES`: Optional JWT access token lifetime (minutes). Defaults to `60`.
 - `WF_SECRET_FILE`: Optional override for where encrypted secrets are stored. Defaults to `<data-root>/secrets.json`.
 

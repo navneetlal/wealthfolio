@@ -11,7 +11,7 @@ use crate::fx::FxServiceTrait;
 use crate::lots::LotRepositoryTrait;
 use crate::portfolio::holdings::holdings_model::{Holding, HoldingType, Instrument, MonetaryValue};
 use crate::portfolio::snapshot::{self, SnapshotServiceTrait};
-use crate::utils::time_utils::{parse_user_timezone_or_default, user_today};
+use crate::utils::time_utils::{activity_date_in_tz, parse_user_timezone_or_default, user_today};
 use async_trait::async_trait;
 use chrono::NaiveDate;
 use log::{debug, error, warn};
@@ -77,16 +77,19 @@ pub trait HoldingIncomeServiceTrait: Send + Sync {
 pub struct HoldingIncomeService {
     activity_repository: Arc<dyn ActivityRepositoryTrait>,
     fx_service: Arc<dyn FxServiceTrait>,
+    timezone: Arc<RwLock<String>>,
 }
 
 impl HoldingIncomeService {
     pub fn new(
         activity_repository: Arc<dyn ActivityRepositoryTrait>,
         fx_service: Arc<dyn FxServiceTrait>,
+        timezone: Arc<RwLock<String>>,
     ) -> Self {
         Self {
             activity_repository,
             fx_service,
+            timezone,
         }
     }
 }
@@ -101,11 +104,13 @@ impl HoldingIncomeServiceTrait for HoldingIncomeService {
         let activities = self
             .activity_repository
             .get_activities_by_account_ids(account_ids)?;
+        let timezone = parse_user_timezone_or_default(&self.timezone.read().unwrap());
         Ok(calculate_asset_income(
             &activities,
             asset_currencies,
             base_currency,
             self.fx_service.as_ref(),
+            timezone,
         ))
     }
 }
@@ -208,9 +213,11 @@ impl HoldingsService {
         activity_repository: Arc<dyn ActivityRepositoryTrait>,
         fx_service: Arc<dyn FxServiceTrait>,
     ) -> Self {
+        let timezone = self.timezone.clone();
         self.with_income_service(Arc::new(HoldingIncomeService::new(
             activity_repository,
             fx_service,
+            timezone,
         )))
     }
 
@@ -808,6 +815,7 @@ fn calculate_asset_income(
     asset_currencies: &HashMap<String, String>,
     base_currency: &str,
     fx_service: &dyn FxServiceTrait,
+    timezone: chrono_tz::Tz,
 ) -> HashMap<String, MonetaryValue> {
     let mut income_by_asset: HashMap<String, MonetaryValue> = HashMap::new();
 
@@ -833,7 +841,7 @@ fn calculate_asset_income(
             continue;
         }
 
-        let activity_date = activity.effective_date();
+        let activity_date = activity_date_in_tz(activity.activity_date, timezone);
         let Some(local_income) = convert_income_amount(
             fx_service,
             amount,
@@ -2707,10 +2715,50 @@ mod tests {
             pending,
         ];
 
-        let income_by_asset =
-            calculate_asset_income(&activities, &asset_currencies, "USD", &fx_service);
+        let income_by_asset = calculate_asset_income(
+            &activities,
+            &asset_currencies,
+            "USD",
+            &fx_service,
+            chrono_tz::UTC,
+        );
 
         assert_eq!(income_by_asset.len(), 1);
+        let income = income_by_asset.get("AAPL").unwrap();
+        assert_eq!(income.local, dec!(15));
+        assert_eq!(income.base, dec!(11));
+    }
+
+    #[test]
+    fn asset_income_uses_user_timezone_for_flow_date_fx() {
+        let local_date = NaiveDate::from_ymd_opt(2025, 2, 3).unwrap();
+        let utc_date = NaiveDate::from_ymd_opt(2025, 2, 4).unwrap();
+        let fx_service = MockFxService::new(vec![
+            ("EUR", "CAD", local_date, dec!(1.5)),
+            ("EUR", "USD", local_date, dec!(1.1)),
+            ("EUR", "CAD", utc_date, dec!(9)),
+            ("EUR", "USD", utc_date, dec!(9)),
+        ]);
+        let asset_currencies = HashMap::from([("AAPL".to_string(), "CAD".to_string())]);
+        let mut activity = test_income_activity(
+            "dividend",
+            "acc-1",
+            Some("AAPL"),
+            ACTIVITY_TYPE_DIVIDEND,
+            dec!(10),
+            "EUR",
+            utc_date,
+        );
+        activity.activity_date = utc_date.and_hms_opt(2, 0, 0).unwrap().and_utc();
+
+        let income_by_asset = calculate_asset_income(
+            &[activity],
+            &asset_currencies,
+            "USD",
+            &fx_service,
+            chrono_tz::America::Toronto,
+        );
+
         let income = income_by_asset.get("AAPL").unwrap();
         assert_eq!(income.local, dec!(15));
         assert_eq!(income.base, dec!(11));
@@ -2731,8 +2779,13 @@ mod tests {
             date,
         )];
 
-        let income_by_asset =
-            calculate_asset_income(&activities, &asset_currencies, "GBP", &fx_service);
+        let income_by_asset = calculate_asset_income(
+            &activities,
+            &asset_currencies,
+            "GBP",
+            &fx_service,
+            chrono_tz::UTC,
+        );
 
         let income = income_by_asset.get("LSE").unwrap();
         assert_eq!(income.local, dec!(1000));
