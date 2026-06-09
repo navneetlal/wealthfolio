@@ -714,6 +714,151 @@ impl ActivityService {
         }
     }
 
+    fn transfer_match_tolerance() -> Decimal {
+        Decimal::new(1, 6)
+    }
+
+    fn opposite_transfer_type(activity_type: &str) -> Option<&'static str> {
+        match activity_type {
+            ACTIVITY_TYPE_TRANSFER_IN => Some(ACTIVITY_TYPE_TRANSFER_OUT),
+            ACTIVITY_TYPE_TRANSFER_OUT => Some(ACTIVITY_TYPE_TRANSFER_IN),
+            _ => None,
+        }
+    }
+
+    fn non_cash_transfer_asset_key(activity: &Activity) -> Option<String> {
+        activity
+            .asset_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|asset_id| !asset_id.is_empty())
+            .filter(|asset_id| !is_cash_symbol(asset_id))
+            .map(str::to_uppercase)
+    }
+
+    fn is_security_transfer_activity(activity: &Activity) -> bool {
+        matches!(
+            activity.effective_type(),
+            ACTIVITY_TYPE_TRANSFER_IN | ACTIVITY_TYPE_TRANSFER_OUT
+        ) && Self::non_cash_transfer_asset_key(activity).is_some()
+    }
+
+    fn transfer_abs_value(activity: &Activity) -> Option<Decimal> {
+        activity
+            .amount
+            .or_else(|| Some(activity.quantity? * activity.unit_price?))
+            .map(|value| value.abs())
+    }
+
+    fn decimals_match(left: Option<Decimal>, right: Option<Decimal>) -> bool {
+        match (left, right) {
+            (Some(left), Some(right)) => {
+                (left.abs() - right.abs()).abs() <= Self::transfer_match_tolerance()
+            }
+            _ => false,
+        }
+    }
+
+    fn transfer_date_diff_days(left: &Activity, right: &Activity) -> i64 {
+        (left.activity_date.date_naive() - right.activity_date.date_naive())
+            .num_days()
+            .abs()
+    }
+
+    fn transfer_candidate_score(day_diff: i64) -> (i32, String) {
+        let score = (100 - (day_diff as i32 * 10)).max(1);
+        let confidence = if day_diff == 0 {
+            "high"
+        } else if day_diff <= 3 {
+            "medium"
+        } else {
+            "low"
+        };
+        (score, confidence.to_string())
+    }
+
+    fn build_transfer_match_candidate(
+        source: &Activity,
+        candidate: &Activity,
+        day_diff: i64,
+    ) -> Option<TransferMatchCandidate> {
+        let source_is_security = Self::is_security_transfer_activity(source);
+        let candidate_is_security = Self::is_security_transfer_activity(candidate);
+        let (score, confidence) = Self::transfer_candidate_score(day_diff);
+        let mut reasons = Vec::new();
+        let mut warnings = Vec::new();
+
+        if source_is_security || candidate_is_security {
+            let source_asset = Self::non_cash_transfer_asset_key(source)?;
+            let candidate_asset = Self::non_cash_transfer_asset_key(candidate)?;
+            if source_asset != candidate_asset {
+                return None;
+            }
+            if !Self::decimals_match(source.quantity, candidate.quantity) {
+                return None;
+            }
+            reasons.push("Same asset".to_string());
+            reasons.push("Same quantity".to_string());
+            if source.currency != candidate.currency {
+                warnings.push(format!(
+                    "Currencies differ ({} vs {}).",
+                    source.currency, candidate.currency
+                ));
+            }
+            if let (Some(source_price), Some(candidate_price)) =
+                (source.unit_price, candidate.unit_price)
+            {
+                let max = source_price.abs().max(candidate_price.abs());
+                if !max.is_zero()
+                    && (source_price.abs() - candidate_price.abs()).abs() / max > Decimal::new(1, 2)
+                {
+                    warnings.push("Prices differ by more than 1%.".to_string());
+                }
+            }
+
+            if day_diff == 0 {
+                reasons.push("Same date".to_string());
+            } else {
+                warnings.push(format!("Dates differ by {} day(s).", day_diff));
+            }
+
+            return Some(TransferMatchCandidate {
+                activity: candidate.clone(),
+                match_kind: "security".to_string(),
+                confidence,
+                score,
+                reasons,
+                warnings,
+            });
+        }
+
+        if !source.currency.eq_ignore_ascii_case(&candidate.currency) {
+            return None;
+        }
+        if !Self::decimals_match(
+            Self::transfer_abs_value(source),
+            Self::transfer_abs_value(candidate),
+        ) {
+            return None;
+        }
+        reasons.push("Same amount".to_string());
+        reasons.push("Same currency".to_string());
+        if day_diff == 0 {
+            reasons.push("Same date".to_string());
+        } else {
+            warnings.push(format!("Dates differ by {} day(s).", day_diff));
+        }
+
+        Some(TransferMatchCandidate {
+            activity: candidate.clone(),
+            match_kind: "cash".to_string(),
+            confidence,
+            score,
+            reasons,
+            warnings,
+        })
+    }
+
     fn load_internal_transfer_pair_for_activity(
         &self,
         activity_id: &str,
@@ -3702,6 +3847,60 @@ impl ActivityServiceTrait for ActivityService {
     ) -> Result<InternalTransferPairResponse> {
         let pair = self.require_internal_transfer_pair_for_activity(&activity_id)?;
         Ok(Self::transfer_pair_response(pair))
+    }
+
+    fn find_transfer_match_candidates(
+        &self,
+        request: TransferMatchCandidateRequest,
+    ) -> Result<Vec<TransferMatchCandidate>> {
+        let source = self
+            .activity_repository
+            .get_activity(&request.activity_id)?;
+        let Some(opposite_type) = Self::opposite_transfer_type(source.effective_type()) else {
+            return Err(Self::invalid_activity_data(
+                "Transfer match candidates require a transfer activity",
+            ));
+        };
+        if source.source_group_id.is_some() {
+            return Ok(Vec::new());
+        }
+
+        let window_days = request.window_days.unwrap_or(7).clamp(0, 90);
+        let limit = request.limit.unwrap_or(25).clamp(1, 100);
+
+        let mut candidates: Vec<TransferMatchCandidate> = self
+            .activity_repository
+            .get_activities()?
+            .into_iter()
+            .filter(|candidate| {
+                candidate.id != source.id
+                    && candidate.account_id != source.account_id
+                    && candidate.is_posted()
+                    && candidate.source_group_id.is_none()
+                    && candidate.effective_type() == opposite_type
+            })
+            .filter_map(|candidate| {
+                let day_diff = Self::transfer_date_diff_days(&source, &candidate);
+                if day_diff > window_days {
+                    return None;
+                }
+                Self::build_transfer_match_candidate(&source, &candidate, day_diff)
+            })
+            .collect();
+
+        candidates.sort_by(|left, right| {
+            right
+                .score
+                .cmp(&left.score)
+                .then_with(|| {
+                    left.activity
+                        .activity_date
+                        .cmp(&right.activity.activity_date)
+                })
+                .then_with(|| left.activity.id.cmp(&right.activity.id))
+        });
+        candidates.truncate(limit);
+        Ok(candidates)
     }
 
     async fn save_internal_transfer_pair(

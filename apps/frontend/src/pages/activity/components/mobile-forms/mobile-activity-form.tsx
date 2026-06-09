@@ -273,7 +273,12 @@ export function MobileActivityForm({
       isSecuritiesTransfer(activity?.activityType ?? "", activity?.assetSymbol, activity?.assetId);
     const initialTransferMode = isSecurityTransferActivity ? "securities" : "cash";
     const flowMetadata = activity?.metadata?.flow as { is_external?: boolean } | undefined;
-    const initialIsExternal = isTransferType ? flowMetadata?.is_external === true : false;
+    const hasInternalPair = Boolean(activity?.transferOutId && activity?.transferInId);
+    const initialIsExternal = isTransferType
+      ? activity?.id
+        ? flowMetadata?.is_external === true || !hasInternalPair
+        : flowMetadata?.is_external === true
+      : false;
     const editingTransferIn = activity?.activityType === ActivityType.TRANSFER_IN;
     const sourceAmount = editingTransferIn
       ? activity?.counterpartAmount
@@ -536,6 +541,12 @@ export function MobileActivityForm({
             (activity?.activityType === ActivityType.TRANSFER_IN
               ? activity.id
               : activity?.counterpartActivityId);
+
+          if (id && (!transferOutId || !transferInId)) {
+            throw new Error(
+              "Use Link transfer... to pair this existing transfer before saving it as internal.",
+            );
+          }
 
           await saveInternalTransferPairMutation.mutateAsync({
             transferOutId: id ? transferOutId : undefined,

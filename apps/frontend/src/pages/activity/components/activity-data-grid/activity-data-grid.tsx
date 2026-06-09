@@ -12,6 +12,7 @@ import { ActivityType } from "@/lib/constants";
 import { isManualSearchResult, quoteModeFromSearchResult } from "@/lib/asset-utils";
 import { generateId } from "@/lib/id";
 import { LinkTransferModal } from "../link-transfer-modal";
+import { TransferMatchDialog } from "../transfer-match-dialog";
 import { ActivityDeleteModal } from "../activity-delete-modal";
 import { useActivityMutations } from "../../hooks/use-activity-mutations";
 import { ActivityDataGridPagination } from "./activity-data-grid-pagination";
@@ -31,6 +32,7 @@ import { useSaveActivities } from "./use-save-activities";
 
 interface ActivityDataGridProps {
   accounts: Account[];
+  transferMatchAccounts?: Account[];
   activities: ActivityDetails[];
   onRefetch: () => Promise<unknown>;
   onEditActivity: (activity: ActivityDetails) => void;
@@ -67,6 +69,7 @@ const DEFAULT_COLUMN_VISIBILITY: VisibilityState = {
  */
 export function ActivityDataGrid({
   accounts,
+  transferMatchAccounts,
   activities,
   onRefetch,
   onEditActivity,
@@ -172,6 +175,11 @@ export function ActivityDataGrid({
   );
 
   const [pendingDeleteActivity, setPendingDeleteActivity] = useState<ActivityDetails | null>(null);
+  const [rowTransferDialog, setRowTransferDialog] = useState<{
+    open: boolean;
+    mode: "link" | "unlink";
+    activity: ActivityDetails | null;
+  }>({ open: false, mode: "link", activity: null });
 
   const executePairedDelete = useCallback(
     (activity: ActivityDetails) => {
@@ -197,6 +205,36 @@ export function ActivityDataGrid({
       }
     },
     [markForDeletion],
+  );
+
+  const handleRowLinkTransfer = useCallback(
+    (activity: ActivityDetails) => {
+      if ((activity as LocalTransaction).isNew || dirtyTransactionIds.has(activity.id)) {
+        toast({
+          title: "Save edits first",
+          description: "Save or discard pending edits before linking this transfer.",
+          variant: "destructive",
+        });
+        return;
+      }
+      setRowTransferDialog({ open: true, mode: "link", activity });
+    },
+    [dirtyTransactionIds],
+  );
+
+  const handleRowUnlinkTransfer = useCallback(
+    (activity: ActivityDetails) => {
+      if ((activity as LocalTransaction).isNew || dirtyTransactionIds.has(activity.id)) {
+        toast({
+          title: "Save edits first",
+          description: "Save or discard pending edits before unlinking this transfer.",
+          variant: "destructive",
+        });
+        return;
+      }
+      setRowTransferDialog({ open: true, mode: "unlink", activity });
+    },
+    [dirtyTransactionIds],
   );
 
   // Race condition guard for async quote resolution
@@ -364,6 +402,8 @@ export function ActivityDataGrid({
     onEditActivity,
     onDuplicate: handleDuplicate,
     onDelete: handleDelete,
+    onLinkTransfer: handleRowLinkTransfer,
+    onUnlinkTransfer: handleRowUnlinkTransfer,
     onSymbolSelect: handleSymbolSelect,
     onCreateCustomAsset: handleCreateCustomAsset,
   });
@@ -795,6 +835,24 @@ export function ActivityDataGrid({
         warnings={transferDialogMode === "link" ? linkWarnings : []}
         onConfirm={transferDialogMode === "link" ? handleLinkConfirm : handleUnlinkConfirm}
         onCancel={() => setTransferDialogOpen(false)}
+      />
+
+      <TransferMatchDialog
+        open={rowTransferDialog.open}
+        mode={rowTransferDialog.mode}
+        sourceActivity={rowTransferDialog.activity}
+        accounts={transferMatchAccounts ?? accounts}
+        onOpenChange={(open) =>
+          setRowTransferDialog((prev) => ({
+            ...prev,
+            open,
+            activity: open ? prev.activity : null,
+          }))
+        }
+        onComplete={() => {
+          dataGrid.table.resetRowSelection();
+          return onRefetch();
+        }}
       />
 
       <ActivityDeleteModal

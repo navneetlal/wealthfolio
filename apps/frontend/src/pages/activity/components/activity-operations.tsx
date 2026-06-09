@@ -8,6 +8,7 @@ import {
 import { Icons } from "@wealthfolio/ui/components/ui/icons";
 
 import type { Activity, ActivityDetails } from "@/lib/types";
+import { ActivityType } from "@/lib/constants";
 import { Row } from "@tanstack/react-table";
 import { useState } from "react";
 import { ActivityDetailSheet } from "./activity-detail-sheet";
@@ -18,6 +19,8 @@ export interface ActivityOperationsProps<TData> {
   onEdit: (activity: ActivityDetails) => void | undefined;
   onDelete: (activity: ActivityDetails) => void | undefined;
   onDuplicate: (activity: ActivityDetails) => void | undefined | Promise<void> | Promise<Activity>;
+  onLinkTransfer?: (activity: ActivityDetails) => void | undefined;
+  onUnlinkTransfer?: (activity: ActivityDetails) => void | undefined;
 }
 
 export function ActivityOperations<TData>({
@@ -26,9 +29,16 @@ export function ActivityOperations<TData>({
   onEdit,
   onDelete,
   onDuplicate,
+  onLinkTransfer,
+  onUnlinkTransfer,
 }: ActivityOperationsProps<TData>) {
   const activity = activityProp ?? (row?.original as ActivityDetails);
   const [detailSheetOpen, setDetailSheetOpen] = useState(false);
+  const isTransfer =
+    activity.activityType === ActivityType.TRANSFER_IN ||
+    activity.activityType === ActivityType.TRANSFER_OUT;
+  const isNew = (activity as ActivityDetails & { isNew?: boolean }).isNew === true;
+  const canShowTransferActions = isTransfer && !isNew && (onLinkTransfer || onUnlinkTransfer);
 
   return (
     <>
@@ -51,6 +61,23 @@ export function ActivityOperations<TData>({
             <Icons.Copy className="mr-2 h-4 w-4" />
             Duplicate
           </DropdownMenuItem>
+          {canShowTransferActions ? (
+            <>
+              {activity.sourceGroupId ? (
+                onUnlinkTransfer ? (
+                  <DropdownMenuItem onClick={() => onUnlinkTransfer(activity)}>
+                    <Icons.Unlink className="mr-2 h-4 w-4" />
+                    Unlink transfer
+                  </DropdownMenuItem>
+                ) : null
+              ) : onLinkTransfer ? (
+                <DropdownMenuItem onClick={() => onLinkTransfer(activity)}>
+                  <Icons.Link className="mr-2 h-4 w-4" />
+                  Link transfer...
+                </DropdownMenuItem>
+              ) : null}
+            </>
+          ) : null}
           <DropdownMenuSeparator />
           <DropdownMenuItem
             className="text-destructive focus:text-destructive flex cursor-pointer items-center"

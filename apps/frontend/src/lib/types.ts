@@ -356,6 +356,21 @@ export interface InternalTransferPairResponse {
   transferOut: Activity;
   transferIn: Activity;
 }
+
+export interface TransferMatchCandidateRequest {
+  activityId: string;
+  windowDays?: number;
+  limit?: number;
+}
+
+export interface TransferMatchCandidate {
+  activity: Activity;
+  matchKind: "cash" | "security";
+  confidence: "high" | "medium" | "low";
+  score: number;
+  reasons: string[];
+  warnings: string[];
+}
 export type ActivityImport = z.infer<typeof importActivitySchema>;
 export type ImportMappingData = z.infer<typeof importMappingSchema>;
 export type ParseConfig = z.infer<typeof parseConfigSchema>;

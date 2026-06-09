@@ -15,10 +15,10 @@ use uuid::Uuid;
 use wealthfolio_core::accounts::{account_supports_purpose, AccountPurpose};
 use wealthfolio_core::activities::ActivityError;
 use wealthfolio_core::activities::{
-    import_type, Activity, ActivityBulkIdentifierMapping, ActivityBulkMutationResult,
-    ActivityDetails, ActivityRepositoryTrait, ActivitySearchResponse, ActivitySearchResponseMeta,
-    ActivityUpdate, ActivityUpsert, BulkUpsertResult, ImportMapping, ImportTemplate, IncomeData,
-    NewActivity, Sort, INCOME_ACTIVITY_TYPES, TRADING_ACTIVITY_TYPES,
+    import_type, is_cash_symbol, Activity, ActivityBulkIdentifierMapping,
+    ActivityBulkMutationResult, ActivityDetails, ActivityRepositoryTrait, ActivitySearchResponse,
+    ActivitySearchResponseMeta, ActivityUpdate, ActivityUpsert, BulkUpsertResult, ImportMapping,
+    ImportTemplate, IncomeData, NewActivity, Sort, INCOME_ACTIVITY_TYPES, TRADING_ACTIVITY_TYPES,
 };
 use wealthfolio_core::limits::ContributionActivity;
 use wealthfolio_core::{Error, Result};
@@ -200,6 +200,64 @@ fn set_transfer_flow_external(metadata: Option<String>, is_external: bool) -> Op
     }
 
     Some(value.to_string())
+}
+
+fn link_transfer_tolerance() -> Decimal {
+    Decimal::new(1, 6)
+}
+
+fn non_cash_transfer_asset_key(activity: &ActivityDB) -> Option<String> {
+    activity
+        .asset_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|asset_id| !asset_id.is_empty())
+        .filter(|asset_id| !is_cash_symbol(asset_id))
+        .map(str::to_uppercase)
+}
+
+fn effective_activity_type(activity: &ActivityDB) -> &str {
+    activity
+        .activity_type_override
+        .as_deref()
+        .unwrap_or(activity.activity_type.as_str())
+}
+
+fn parse_optional_decimal(value: Option<&String>) -> Option<Decimal> {
+    value
+        .and_then(|value| Decimal::from_str(value.trim()).ok())
+        .map(|value| value.abs())
+}
+
+fn validate_link_transfer_asset_shape(
+    transfer_in: &ActivityDB,
+    transfer_out: &ActivityDB,
+) -> Result<()> {
+    let in_asset = non_cash_transfer_asset_key(transfer_in);
+    let out_asset = non_cash_transfer_asset_key(transfer_out);
+    if in_asset.is_none() && out_asset.is_none() {
+        return Ok(());
+    }
+
+    if in_asset != out_asset {
+        return Err(Error::from(ActivityError::InvalidData(
+            "Security transfer legs use different assets".to_string(),
+        )));
+    }
+
+    let in_qty = parse_optional_decimal(transfer_in.quantity.as_ref());
+    let out_qty = parse_optional_decimal(transfer_out.quantity.as_ref());
+    match (in_qty, out_qty) {
+        (Some(in_qty), Some(out_qty)) if (in_qty - out_qty).abs() <= link_transfer_tolerance() => {
+            Ok(())
+        }
+        (Some(_), Some(_)) => Err(Error::from(ActivityError::InvalidData(
+            "Security transfer legs use different quantities".to_string(),
+        ))),
+        _ => Err(Error::from(ActivityError::InvalidData(
+            "Security transfer legs must both include quantity".to_string(),
+        ))),
+    }
 }
 
 // Inherent methods for ActivityRepository
@@ -668,7 +726,7 @@ impl ActivityRepositoryTrait for ActivityRepository {
                     .map_err(|e| Error::from(ActivityError::NotFound(e.to_string())))?;
 
                 let (mut transfer_in, mut transfer_out) =
-                    match (a.activity_type.as_str(), b.activity_type.as_str()) {
+                    match (effective_activity_type(&a), effective_activity_type(&b)) {
                         (ACTIVITY_TYPE_TRANSFER_IN, ACTIVITY_TYPE_TRANSFER_OUT) => (a, b),
                         (ACTIVITY_TYPE_TRANSFER_OUT, ACTIVITY_TYPE_TRANSFER_IN) => (b, a),
                         _ => {
@@ -689,6 +747,7 @@ impl ActivityRepositoryTrait for ActivityRepository {
                         "Both transfer legs share the same account".to_string(),
                     )));
                 }
+                validate_link_transfer_asset_shape(&transfer_in, &transfer_out)?;
 
                 let group_id = Uuid::new_v4().to_string();
                 let now = chrono::Utc::now().to_rfc3339();
@@ -758,7 +817,7 @@ impl ActivityRepositoryTrait for ActivityRepository {
                     .map_err(|e| Error::from(ActivityError::NotFound(e.to_string())))?;
 
                 let (mut transfer_in, mut transfer_out) =
-                    match (a.activity_type.as_str(), b.activity_type.as_str()) {
+                    match (effective_activity_type(&a), effective_activity_type(&b)) {
                         (ACTIVITY_TYPE_TRANSFER_IN, ACTIVITY_TYPE_TRANSFER_OUT) => (a, b),
                         (ACTIVITY_TYPE_TRANSFER_OUT, ACTIVITY_TYPE_TRANSFER_IN) => (b, a),
                         _ => {
@@ -3332,6 +3391,120 @@ mod tests {
         assert_eq!(activity_user_modified(&mut conn, "transfer-in"), 1);
         assert_eq!(activity_user_modified(&mut conn, "transfer-out"), 1);
         assert_eq!(sync_outbox_count(&mut conn), 2);
+    }
+
+    #[tokio::test]
+    async fn link_transfer_activities_rejects_security_asset_or_quantity_mismatch() {
+        let (pool, writer) = setup_db();
+        let repo = ActivityRepository::new(pool.clone(), writer);
+        let mut conn = get_connection(&pool).expect("conn");
+
+        insert_account(&mut conn, "acc-a");
+        insert_account(&mut conn, "acc-b");
+
+        let insert_asset = |conn: &mut SqliteConnection, id: &str| {
+            diesel::insert_into(assets::table)
+                .values((
+                    assets::id.eq(id.to_string()),
+                    assets::kind.eq("INVESTMENT".to_string()),
+                    assets::is_active.eq(1),
+                    assets::quote_mode.eq("MANUAL".to_string()),
+                    assets::quote_ccy.eq("USD".to_string()),
+                    assets::created_at.eq("2024-01-15T00:00:00+00:00".to_string()),
+                    assets::updated_at.eq("2024-01-15T00:00:00+00:00".to_string()),
+                ))
+                .execute(conn)
+                .expect("insert asset");
+        };
+        insert_asset(&mut conn, "SEC:AAPL:XNAS");
+        insert_asset(&mut conn, "SEC:MSFT:XNAS");
+
+        let set_security_fields =
+            |conn: &mut SqliteConnection, id: &str, asset_id: &str, quantity: &str| {
+                diesel::update(activities::table.find(id))
+                    .set((
+                        activities::asset_id.eq(Some(asset_id.to_string())),
+                        activities::quantity.eq(Some(quantity.to_string())),
+                        activities::unit_price.eq(Some("100".to_string())),
+                        activities::amount.eq(None::<String>),
+                    ))
+                    .execute(conn)
+                    .expect("set security transfer fields");
+            };
+
+        insert_transfer_activity(&mut conn, "asset-out", "acc-a", "TRANSFER_OUT", None, None);
+        insert_transfer_activity(&mut conn, "asset-in", "acc-b", "TRANSFER_IN", None, None);
+        set_security_fields(&mut conn, "asset-out", "SEC:AAPL:XNAS", "10");
+        set_security_fields(&mut conn, "asset-in", "SEC:MSFT:XNAS", "10");
+
+        let asset_mismatch = repo
+            .link_transfer_activities("asset-in".to_string(), "asset-out".to_string())
+            .await;
+        assert!(asset_mismatch.is_err());
+
+        insert_transfer_activity(
+            &mut conn,
+            "quantity-out",
+            "acc-a",
+            "TRANSFER_OUT",
+            None,
+            None,
+        );
+        insert_transfer_activity(&mut conn, "quantity-in", "acc-b", "TRANSFER_IN", None, None);
+        set_security_fields(&mut conn, "quantity-out", "SEC:AAPL:XNAS", "10");
+        set_security_fields(&mut conn, "quantity-in", "SEC:AAPL:XNAS", "9");
+
+        let quantity_mismatch = repo
+            .link_transfer_activities("quantity-in".to_string(), "quantity-out".to_string())
+            .await;
+        assert!(quantity_mismatch.is_err());
+
+        let groups: Vec<Option<String>> = activities::table
+            .filter(activities::id.eq_any(["asset-out", "asset-in", "quantity-out", "quantity-in"]))
+            .select(activities::source_group_id)
+            .load(&mut conn)
+            .expect("load source groups");
+        assert!(groups.iter().all(Option::is_none));
+    }
+
+    #[tokio::test]
+    async fn link_and_unlink_transfer_activities_use_effective_activity_type() {
+        let (pool, writer) = setup_db();
+        let repo = ActivityRepository::new(pool.clone(), writer);
+        let mut conn = get_connection(&pool).expect("conn");
+
+        insert_account(&mut conn, "acc-a");
+        insert_account(&mut conn, "acc-b");
+        insert_transfer_activity(&mut conn, "override-out", "acc-a", "FEE", None, None);
+        diesel::update(activities::table.find("override-out"))
+            .set(activities::activity_type_override.eq(Some("TRANSFER_OUT".to_string())))
+            .execute(&mut conn)
+            .expect("set transfer override");
+        insert_transfer_activity(&mut conn, "override-in", "acc-b", "TRANSFER_IN", None, None);
+
+        let (transfer_in, transfer_out) = repo
+            .link_transfer_activities("override-out".to_string(), "override-in".to_string())
+            .await
+            .expect("link effective transfer pair");
+
+        assert_eq!(transfer_in.id, "override-in");
+        assert_eq!(transfer_out.id, "override-out");
+        assert_eq!(
+            transfer_out.activity_type_override.as_deref(),
+            Some("TRANSFER_OUT")
+        );
+        assert!(transfer_in.source_group_id.is_some());
+        assert_eq!(transfer_in.source_group_id, transfer_out.source_group_id);
+
+        let (unlinked_in, unlinked_out) = repo
+            .unlink_transfer_activities("override-out".to_string(), "override-in".to_string())
+            .await
+            .expect("unlink effective transfer pair");
+
+        assert_eq!(unlinked_in.id, "override-in");
+        assert_eq!(unlinked_out.id, "override-out");
+        assert!(unlinked_in.source_group_id.is_none());
+        assert!(unlinked_out.source_group_id.is_none());
     }
 
     #[tokio::test]

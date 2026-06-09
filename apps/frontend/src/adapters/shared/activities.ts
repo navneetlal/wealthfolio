@@ -16,6 +16,8 @@ import type {
   ImportTemplateData,
   InternalTransferPairRequest,
   InternalTransferPairResponse,
+  TransferMatchCandidate,
+  TransferMatchCandidateRequest,
   BrokerSyncProfileData,
   SaveBrokerSyncProfileRulesRequest,
 } from "@/lib/types";
@@ -151,6 +153,19 @@ export const getTransferPairForActivity = async (
     });
   } catch (err) {
     logger.error("Error fetching transfer pair.");
+    throw err;
+  }
+};
+
+export const findTransferMatchCandidates = async (
+  request: TransferMatchCandidateRequest,
+): Promise<TransferMatchCandidate[]> => {
+  try {
+    return await invoke<TransferMatchCandidate[]>("find_transfer_match_candidates", {
+      request,
+    });
+  } catch (err) {
+    logger.error("Error finding transfer match candidates.");
     throw err;
   }
 };

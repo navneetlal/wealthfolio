@@ -12,6 +12,7 @@ use wealthfolio_core::activities::{
     ActivitySearchResponse, ActivityUpdate, ImportActivitiesResult, ImportAssetCandidate,
     ImportAssetPreviewItem, ImportMappingData, ImportTemplateData, InternalTransferPairRequest,
     InternalTransferPairResponse, NewActivity, ParseConfig, ParsedCsvResult,
+    TransferMatchCandidate, TransferMatchCandidateRequest,
 };
 
 use super::shared::parse_date_optional;
@@ -143,6 +144,16 @@ async fn get_transfer_pair_for_activity(
 ) -> ApiResult<Json<InternalTransferPairResponse>> {
     let pair = state.activity_service.get_transfer_pair_for_activity(id)?;
     Ok(Json(pair))
+}
+
+async fn find_transfer_match_candidates(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<TransferMatchCandidateRequest>,
+) -> ApiResult<Json<Vec<TransferMatchCandidate>>> {
+    let candidates = state
+        .activity_service
+        .find_transfer_match_candidates(request)?;
+    Ok(Json(candidates))
 }
 
 async fn save_internal_transfer_pair(
@@ -417,6 +428,10 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/activities/transfer-pair",
             post(save_internal_transfer_pair),
+        )
+        .route(
+            "/activities/transfer-match-candidates",
+            post(find_transfer_match_candidates),
         )
         .route("/activities/link", post(link_transfer_activities))
         .route("/activities/unlink", post(unlink_transfer_activities))

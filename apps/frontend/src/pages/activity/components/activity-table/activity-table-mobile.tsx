@@ -27,6 +27,8 @@ interface ActivityTableMobileProps {
   handleEdit: (activity?: ActivityDetails) => void;
   handleDelete: (activity: ActivityDetails) => void;
   onDuplicate: (activity: ActivityDetails) => Promise<void>;
+  onLinkTransfer?: (activity: ActivityDetails) => void;
+  onUnlinkTransfer?: (activity: ActivityDetails) => void;
   filtersActive?: boolean;
   onAdd?: () => void;
   onClearFilters?: () => void;
@@ -38,6 +40,8 @@ export const ActivityTableMobile = ({
   handleEdit,
   handleDelete,
   onDuplicate,
+  onLinkTransfer,
+  onUnlinkTransfer,
   filtersActive = false,
   onAdd,
   onClearFilters,
@@ -155,6 +159,8 @@ export const ActivityTableMobile = ({
                   onEdit={handleEdit}
                   onDelete={handleDelete}
                   onDuplicate={onDuplicate}
+                  onLinkTransfer={onLinkTransfer}
+                  onUnlinkTransfer={onUnlinkTransfer}
                 />
               </div>
             </Card>
@@ -195,6 +201,8 @@ export const ActivityTableMobile = ({
                   onEdit={handleEdit}
                   onDelete={handleDelete}
                   onDuplicate={onDuplicate}
+                  onLinkTransfer={onLinkTransfer}
+                  onUnlinkTransfer={onUnlinkTransfer}
                 />
               </div>
 

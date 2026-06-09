@@ -15,6 +15,7 @@ use wealthfolio_core::{
         ActivityUpdate, BrokerSyncProfileData, ImportAssetCandidate, ImportAssetPreviewItem,
         ImportMappingData, ImportTemplateData, ImportTemplateScope, InternalTransferPairRequest,
         InternalTransferPairResponse, NewActivity, SaveBrokerSyncProfileRulesRequest, Sort,
+        TransferMatchCandidate, TransferMatchCandidateRequest,
     },
     assets::{
         Asset, AssetMetadata, AssetResolutionInput, AssetResolutionOutput, AssetServiceTrait,
@@ -433,6 +434,13 @@ impl ActivityServiceTrait for MockActivityService {
                 total_row_count: self.activities.len() as i64,
             },
         })
+    }
+
+    fn find_transfer_match_candidates(
+        &self,
+        _request: TransferMatchCandidateRequest,
+    ) -> CoreResult<Vec<TransferMatchCandidate>> {
+        Ok(Vec::new())
     }
 
     fn get_first_activity_date(

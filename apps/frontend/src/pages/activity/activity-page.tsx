@@ -33,6 +33,7 @@ import ActivityTableMobile from "./components/activity-table/activity-table-mobi
 import { ActivityViewControls, type ActivityViewMode } from "./components/activity-view-controls";
 import { BulkHoldingsModal } from "./components/forms/bulk-holdings-modal";
 import { MobileActivityForm } from "./components/mobile-forms/mobile-activity-form";
+import { TransferMatchDialog } from "./components/transfer-match-dialog";
 import { useActivityMutations } from "./hooks/use-activity-mutations";
 import { useActivitySearch, type ActivityStatusFilter } from "./hooks/use-activity-search";
 import {
@@ -85,6 +86,11 @@ const ActivityPage = () => {
   const [showDeleteAlert, setShowDeleteAlert] = useState(false);
   const [showBulkHoldingsForm, setShowBulkHoldingsForm] = useState(false);
   const [showAlternativeAssetModal, setShowAlternativeAssetModal] = useState(false);
+  const [transferMatchDialog, setTransferMatchDialog] = useState<{
+    open: boolean;
+    mode: "link" | "unlink";
+    activity: ActivityDetails | null;
+  }>({ open: false, mode: "link", activity: null });
   const [showActionPalette, setShowActionPalette] = useState(false);
   const [showSpendingActionPalette, setShowSpendingActionPalette] = useState(false);
   const isMobileViewport = useIsMobileViewport();
@@ -521,6 +527,14 @@ const ActivityPage = () => {
     [duplicateActivityMutation],
   );
 
+  const handleLinkTransfer = useCallback((activity: ActivityDetails) => {
+    setTransferMatchDialog({ open: true, mode: "link", activity });
+  }, []);
+
+  const handleUnlinkTransfer = useCallback((activity: ActivityDetails) => {
+    setTransferMatchDialog({ open: true, mode: "unlink", activity });
+  }, []);
+
   const handleDeleteConfirm = async () => {
     if (!selectedActivity?.id) return;
     await deleteActivityMutation.mutateAsync(selectedActivity.id);
@@ -740,6 +754,8 @@ const ActivityPage = () => {
           handleEdit={handleEdit}
           handleDelete={handleDelete}
           onDuplicate={handleDuplicate}
+          onLinkTransfer={handleLinkTransfer}
+          onUnlinkTransfer={handleUnlinkTransfer}
           filtersActive={investmentsFiltersActive}
           onAdd={() => handleEdit(undefined)}
           onClearFilters={clearInvestmentsFilters}
@@ -747,6 +763,7 @@ const ActivityPage = () => {
       ) : shouldUseDatagridView ? (
         <ActivityDataGrid
           accounts={investmentAccounts}
+          transferMatchAccounts={accounts}
           activities={datagridActivities}
           onRefetch={paginatedSearch.refetch}
           onEditActivity={handleEdit}
@@ -768,6 +785,8 @@ const ActivityPage = () => {
           onSortingChange={setSorting}
           handleEdit={handleEdit}
           handleDelete={handleDelete}
+          onLinkTransfer={handleLinkTransfer}
+          onUnlinkTransfer={handleUnlinkTransfer}
           filtersActive={investmentsFiltersActive}
           onAdd={() => handleEdit(undefined)}
           onClearFilters={clearInvestmentsFilters}
@@ -826,6 +845,20 @@ const ActivityPage = () => {
       <AlternativeAssetQuickAddModal
         open={showAlternativeAssetModal}
         onOpenChange={setShowAlternativeAssetModal}
+      />
+      <TransferMatchDialog
+        open={transferMatchDialog.open}
+        mode={transferMatchDialog.mode}
+        sourceActivity={transferMatchDialog.activity}
+        accounts={accounts}
+        onOpenChange={(open) =>
+          setTransferMatchDialog((prev) => ({
+            ...prev,
+            open,
+            activity: open ? prev.activity : null,
+          }))
+        }
+        onComplete={infiniteSearch.refetch}
       />
     </>
   );

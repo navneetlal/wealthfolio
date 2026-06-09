@@ -9,6 +9,7 @@ use wealthfolio_core::activities::{
     ActivitySearchResponse, ActivityUpdate, ImportActivitiesResult, ImportAssetCandidate,
     ImportAssetPreviewItem, ImportMappingData, ImportTemplateData, InternalTransferPairRequest,
     InternalTransferPairResponse, NewActivity, ParseConfig, ParsedCsvResult, Sort,
+    TransferMatchCandidate, TransferMatchCandidateRequest,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -103,6 +104,18 @@ pub async fn get_transfer_pair_for_activity(
     state
         .activity_service()
         .get_transfer_pair_for_activity(activity_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn find_transfer_match_candidates(
+    request: TransferMatchCandidateRequest,
+    state: State<'_, Arc<ServiceContext>>,
+) -> Result<Vec<TransferMatchCandidate>, String> {
+    debug!("Finding transfer match candidates...");
+    state
+        .activity_service()
+        .find_transfer_match_candidates(request)
         .map_err(|e| e.to_string())
 }
 

@@ -372,7 +372,10 @@ export const ACTIVITY_FORM_CONFIG: Record<
       const transferMode = transferIsSecurity ? "securities" : "cash";
       // Derive isExternal from metadata (if flow.is_external is true)
       const flowMetadata = activity?.metadata?.flow as { is_external?: boolean } | undefined;
-      const isExternal = flowMetadata?.is_external === true;
+      const hasInternalPair = Boolean(activity?.transferOutId && activity?.transferInId);
+      const isExternal = activity?.id
+        ? flowMetadata?.is_external === true || !hasInternalPair
+        : flowMetadata?.is_external === true;
       // Derive direction from activity type
       const direction = activity?.activityType === ActivityType.TRANSFER_IN ? "in" : "out";
       const editingTransferIn = activity?.activityType === ActivityType.TRANSFER_IN;

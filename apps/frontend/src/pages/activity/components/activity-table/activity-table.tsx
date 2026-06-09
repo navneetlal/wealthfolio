@@ -56,6 +56,8 @@ interface ActivityTableProps {
   onSortingChange: (sorting: SortingState) => void;
   handleEdit: (activity?: ActivityDetails) => void;
   handleDelete: (activity: ActivityDetails) => void;
+  onLinkTransfer?: (activity: ActivityDetails) => void;
+  onUnlinkTransfer?: (activity: ActivityDetails) => void;
   filtersActive?: boolean;
   onAdd?: () => void;
   onClearFilters?: () => void;
@@ -68,6 +70,8 @@ export const ActivityTable = ({
   onSortingChange,
   handleEdit,
   handleDelete,
+  onLinkTransfer,
+  onUnlinkTransfer,
   filtersActive = false,
   onAdd,
   onClearFilters,
@@ -488,13 +492,22 @@ export const ActivityTable = ({
               onEdit={handleEdit}
               onDelete={handleDelete}
               onDuplicate={handleDuplicate}
+              onLinkTransfer={onLinkTransfer}
+              onUnlinkTransfer={onUnlinkTransfer}
             />
           );
         },
         enableHiding: false,
       },
     ],
-    [handleEdit, handleDelete, handleDuplicate, symbolExchangeCountMap],
+    [
+      handleEdit,
+      handleDelete,
+      handleDuplicate,
+      onLinkTransfer,
+      onUnlinkTransfer,
+      symbolExchangeCountMap,
+    ],
   );
 
   const handleSortingChange = React.useCallback<OnChangeFn<SortingState>>(

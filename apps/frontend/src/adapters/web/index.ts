@@ -90,6 +90,7 @@ export {
   deleteActivity,
   getImportTemplate,
   getBrokerSyncProfile,
+  findTransferMatchCandidates,
   getTransferPairForActivity,
   getAccountImportMapping,
   linkAccountTemplate,

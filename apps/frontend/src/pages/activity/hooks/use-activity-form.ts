@@ -138,6 +138,12 @@ export function useActivityForm({
                   ? activity.id
                   : activity?.counterpartActivityId);
 
+              if (isEditing && (!transferOutId || !transferInId)) {
+                throw new Error(
+                  "Use Link transfer... to pair this existing transfer before saving it as internal.",
+                );
+              }
+
               await saveInternalTransferPairMutation.mutateAsync({
                 transferOutId: isEditing ? transferOutId : undefined,
                 transferInId: isEditing ? transferInId : undefined,

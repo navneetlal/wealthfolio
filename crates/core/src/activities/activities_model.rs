@@ -660,6 +660,27 @@ pub struct InternalTransferPairResponse {
     pub transfer_in: Activity,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransferMatchCandidateRequest {
+    pub activity_id: String,
+    #[serde(default)]
+    pub window_days: Option<i64>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransferMatchCandidate {
+    pub activity: Activity,
+    pub match_kind: String,
+    pub confidence: String,
+    pub score: i32,
+    pub reasons: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
 /// Structured error reported for a single bulk mutation entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

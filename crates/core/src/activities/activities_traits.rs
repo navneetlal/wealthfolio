@@ -299,6 +299,10 @@ pub trait ActivityServiceTrait: Send + Sync {
         &self,
         activity_id: String,
     ) -> Result<InternalTransferPairResponse>;
+    fn find_transfer_match_candidates(
+        &self,
+        request: TransferMatchCandidateRequest,
+    ) -> Result<Vec<TransferMatchCandidate>>;
     async fn save_internal_transfer_pair(
         &self,
         request: InternalTransferPairRequest,

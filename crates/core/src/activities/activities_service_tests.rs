@@ -1719,6 +1719,93 @@ mod tests {
         }
     }
 
+    struct TransferActivitySeed<'a> {
+        id: &'a str,
+        account_id: &'a str,
+        activity_type: &'a str,
+        date: &'a str,
+        amount: Option<Decimal>,
+        currency: &'a str,
+        asset_id: Option<&'a str>,
+        quantity: Option<Decimal>,
+        unit_price: Option<Decimal>,
+    }
+
+    fn create_transfer_activity(seed: TransferActivitySeed<'_>) -> Activity {
+        Activity {
+            id: seed.id.to_string(),
+            account_id: seed.account_id.to_string(),
+            asset_id: seed.asset_id.map(str::to_string),
+            activity_type: seed.activity_type.to_string(),
+            activity_type_override: None,
+            source_type: None,
+            subtype: None,
+            status: ActivityStatus::Posted,
+            activity_date: parse_test_activity_datetime(seed.date),
+            settlement_date: None,
+            quantity: seed.quantity,
+            unit_price: seed.unit_price,
+            amount: seed.amount,
+            fee: Some(dec!(0)),
+            currency: seed.currency.to_string(),
+            fx_rate: None,
+            notes: None,
+            metadata: Some(json!({ "flow": { "is_external": true } })),
+            source_system: Some("MANUAL".to_string()),
+            source_record_id: None,
+            source_group_id: None,
+            idempotency_key: None,
+            import_run_id: None,
+            is_user_modified: false,
+            needs_review: false,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    fn create_cash_transfer_activity(
+        id: &str,
+        account_id: &str,
+        activity_type: &str,
+        date: &str,
+        amount: Decimal,
+        currency: &str,
+    ) -> Activity {
+        create_transfer_activity(TransferActivitySeed {
+            id,
+            account_id,
+            activity_type,
+            date,
+            amount: Some(amount),
+            currency,
+            asset_id: None,
+            quantity: None,
+            unit_price: None,
+        })
+    }
+
+    fn create_security_transfer_activity(
+        id: &str,
+        account_id: &str,
+        activity_type: &str,
+        date: &str,
+        asset_id: &str,
+        quantity: Decimal,
+        unit_price: Decimal,
+    ) -> Activity {
+        create_transfer_activity(TransferActivitySeed {
+            id,
+            account_id,
+            activity_type,
+            date,
+            amount: None,
+            currency: "USD",
+            asset_id: Some(asset_id),
+            quantity: Some(quantity),
+            unit_price: Some(unit_price),
+        })
+    }
+
     fn create_test_activity_update(
         id: &str,
         account_id: &str,
@@ -7383,6 +7470,150 @@ mod tests {
             Some(true),
             "unpaired inserted leg should keep its external flag"
         );
+    }
+
+    #[test]
+    fn find_transfer_match_candidates_returns_cash_matches_only() {
+        let account_service = Arc::new(MockAccountService::new());
+        let asset_service = Arc::new(MockAssetService::new());
+        let fx_service = Arc::new(MockFxService::new());
+        let activity_repository = Arc::new(MockActivityRepository::new());
+
+        activity_repository.add_activity(create_cash_transfer_activity(
+            "source-out",
+            "acc-a",
+            "TRANSFER_OUT",
+            "2024-01-15T00:00:00Z",
+            dec!(100),
+            "USD",
+        ));
+        activity_repository.add_activity(create_cash_transfer_activity(
+            "cash-match",
+            "acc-b",
+            "TRANSFER_IN",
+            "2024-01-17T00:00:00Z",
+            dec!(100),
+            "USD",
+        ));
+        activity_repository.add_activity(create_cash_transfer_activity(
+            "wrong-amount",
+            "acc-b",
+            "TRANSFER_IN",
+            "2024-01-17T00:00:00Z",
+            dec!(101),
+            "USD",
+        ));
+        activity_repository.add_activity(create_cash_transfer_activity(
+            "same-account",
+            "acc-a",
+            "TRANSFER_IN",
+            "2024-01-17T00:00:00Z",
+            dec!(100),
+            "USD",
+        ));
+        let mut linked = create_cash_transfer_activity(
+            "already-linked",
+            "acc-c",
+            "TRANSFER_IN",
+            "2024-01-17T00:00:00Z",
+            dec!(100),
+            "USD",
+        );
+        linked.source_group_id = Some("group-1".to_string());
+        activity_repository.add_activity(linked);
+
+        let activity_service = ActivityService::new(
+            activity_repository,
+            account_service,
+            asset_service,
+            fx_service,
+            Arc::new(MockQuoteService),
+        );
+
+        let candidates = activity_service
+            .find_transfer_match_candidates(TransferMatchCandidateRequest {
+                activity_id: "source-out".to_string(),
+                window_days: Some(7),
+                limit: Some(25),
+            })
+            .expect("candidate search should succeed");
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].activity.id, "cash-match");
+        assert_eq!(candidates[0].match_kind, "cash");
+        assert!(candidates[0]
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("Dates differ")));
+    }
+
+    #[test]
+    fn find_transfer_match_candidates_matches_security_by_asset_and_quantity() {
+        let account_service = Arc::new(MockAccountService::new());
+        let asset_service = Arc::new(MockAssetService::new());
+        let fx_service = Arc::new(MockFxService::new());
+        let activity_repository = Arc::new(MockActivityRepository::new());
+
+        activity_repository.add_activity(create_security_transfer_activity(
+            "security-out",
+            "acc-a",
+            "TRANSFER_OUT",
+            "2024-01-15T00:00:00Z",
+            "SEC:AAPL:XNAS",
+            dec!(10),
+            dec!(150),
+        ));
+        activity_repository.add_activity(create_security_transfer_activity(
+            "security-match",
+            "acc-b",
+            "TRANSFER_IN",
+            "2024-01-15T00:00:00Z",
+            "SEC:AAPL:XNAS",
+            dec!(10),
+            dec!(153),
+        ));
+        activity_repository.add_activity(create_security_transfer_activity(
+            "wrong-quantity",
+            "acc-b",
+            "TRANSFER_IN",
+            "2024-01-15T00:00:00Z",
+            "SEC:AAPL:XNAS",
+            dec!(9),
+            dec!(150),
+        ));
+        activity_repository.add_activity(create_security_transfer_activity(
+            "wrong-asset",
+            "acc-b",
+            "TRANSFER_IN",
+            "2024-01-15T00:00:00Z",
+            "SEC:MSFT:XNAS",
+            dec!(10),
+            dec!(150),
+        ));
+
+        let activity_service = ActivityService::new(
+            activity_repository,
+            account_service,
+            asset_service,
+            fx_service,
+            Arc::new(MockQuoteService),
+        );
+
+        let candidates = activity_service
+            .find_transfer_match_candidates(TransferMatchCandidateRequest {
+                activity_id: "security-out".to_string(),
+                window_days: Some(7),
+                limit: Some(25),
+            })
+            .expect("candidate search should succeed");
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].activity.id, "security-match");
+        assert_eq!(candidates[0].match_kind, "security");
+        assert!(candidates[0]
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("Prices differ")));
     }
 
     #[tokio::test]

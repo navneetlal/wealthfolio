@@ -37,6 +37,7 @@ import {
 
 import { CashActivityForm } from "./cash-activity-form";
 import { ActivityForm } from "@/pages/activity/components/activity-form";
+import { TransferMatchDialog } from "@/pages/activity/components/transfer-match-dialog";
 import { getActivityRestrictionLevel } from "@/lib/activity-restrictions";
 import { ActivityType } from "@/lib/constants";
 import type { AmountRange } from "./amount-range-filter";
@@ -164,6 +165,11 @@ export const SpendingTransactionsTab = forwardRef<SpendingTransactionsTabHandle>
     const [transferActivityType, setTransferActivityType] = useState<ActivityType>(
       ActivityType.TRANSFER_OUT,
     );
+    const [transferMatchDialog, setTransferMatchDialog] = useState<{
+      open: boolean;
+      mode: "link" | "unlink";
+      row: TransactionRowVM | null;
+    }>({ open: false, mode: "link", row: null });
     const [deletingIds, setDeletingIds] = useState<string[] | null>(null);
     const [deletePreview, setDeletePreview] = useState<DeletePreview | undefined>();
 
@@ -603,6 +609,12 @@ export const SpendingTransactionsTab = forwardRef<SpendingTransactionsTabHandle>
         currency: row.activity.currency,
       });
     }, []);
+    const handleLinkTransfer = useCallback((row: TransactionRowVM) => {
+      setTransferMatchDialog({ open: true, mode: "link", row });
+    }, []);
+    const handleUnlinkTransfer = useCallback((row: TransactionRowVM) => {
+      setTransferMatchDialog({ open: true, mode: "unlink", row });
+    }, []);
 
     const handleToggleRow = useCallback((id: string) => {
       setSelectedRowIds((prev) => {
@@ -731,6 +743,8 @@ export const SpendingTransactionsTab = forwardRef<SpendingTransactionsTabHandle>
             onEdit={handleEditRow}
             onDuplicate={handleDuplicate}
             onDelete={handleDeleteRow}
+            onLinkTransfer={handleLinkTransfer}
+            onUnlinkTransfer={handleUnlinkTransfer}
           />
         );
       });
@@ -920,6 +934,21 @@ export const SpendingTransactionsTab = forwardRef<SpendingTransactionsTabHandle>
             setDeletePreview(undefined);
           }}
           onConfirm={() => deletingIds && deleteMutation.mutate(deletingIds)}
+        />
+
+        <TransferMatchDialog
+          open={transferMatchDialog.open}
+          mode={transferMatchDialog.mode}
+          sourceActivity={transferMatchDialog.row?.activity}
+          accounts={accounts}
+          onOpenChange={(open) =>
+            setTransferMatchDialog((prev) => ({
+              ...prev,
+              open,
+              row: open ? prev.row : null,
+            }))
+          }
+          onComplete={refetch}
         />
       </div>
     );

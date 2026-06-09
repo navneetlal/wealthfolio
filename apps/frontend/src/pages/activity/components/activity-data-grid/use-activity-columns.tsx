@@ -68,6 +68,8 @@ interface UseActivityColumnsOptions {
   onEditActivity: (activity: ActivityDetails) => void;
   onDuplicate: (activity: ActivityDetails) => void;
   onDelete: (activity: ActivityDetails) => void;
+  onLinkTransfer?: (activity: ActivityDetails) => void;
+  onUnlinkTransfer?: (activity: ActivityDetails) => void;
   /** Called when a symbol is selected from search, with the full result including exchangeMic */
   onSymbolSelect?: (rowIndex: number, result: SymbolSearchResult) => void;
   /** Called when user wants to create a custom asset. Opens a dialog to collect asset metadata. */
@@ -82,6 +84,8 @@ export function useActivityColumns({
   onEditActivity,
   onDuplicate,
   onDelete,
+  onLinkTransfer,
+  onUnlinkTransfer,
   onSymbolSelect,
   onCreateCustomAsset,
 }: UseActivityColumnsOptions) {
@@ -436,6 +440,8 @@ export function useActivityColumns({
               onEdit={onEditActivity}
               onDuplicate={onDuplicate}
               onDelete={onDelete}
+              onLinkTransfer={onLinkTransfer}
+              onUnlinkTransfer={onUnlinkTransfer}
             />
           </div>
         ),
@@ -449,6 +455,8 @@ export function useActivityColumns({
       onDelete,
       onDuplicate,
       onEditActivity,
+      onLinkTransfer,
+      onUnlinkTransfer,
       onSymbolSelect,
     ],
   );
