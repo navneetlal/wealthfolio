@@ -82,9 +82,9 @@ export const HoldingsPage = () => {
     "holdings-sort-by",
     "marketValue",
   );
-  const [showTotalReturn, setShowTotalReturn] = usePersistentState<boolean>(
-    "holdings-show-total-return",
-    true,
+  const [performanceMode, setPerformanceMode] = usePersistentState<"daily" | "pnl" | "return">(
+    "holdings-performance-mode",
+    "pnl",
   );
 
   // Alternative asset action state
@@ -405,8 +405,6 @@ export const HoldingsPage = () => {
             <HoldingsTable
               holdings={filteredHoldings ?? []}
               isLoading={isDataLoading}
-              showTotalReturn={showTotalReturn}
-              setShowTotalReturn={setShowTotalReturn}
               onClassify={(holding) =>
                 setClassifyAsset({
                   id: holding.instrument?.id ?? holding.id,
@@ -431,7 +429,8 @@ export const HoldingsPage = () => {
               showSearch={true}
               showFilterButton={false}
               sortBy={sortBy}
-              showTotalReturn={showTotalReturn}
+              performanceMode={performanceMode}
+              setPerformanceMode={setPerformanceMode}
               typeOptions={availableTypeOptions}
             />
           </div>
@@ -664,8 +663,8 @@ export const HoldingsPage = () => {
         setSelectedTypes={setSelectedTypes}
         sortBy={sortBy}
         setSortBy={setSortBy}
-        showTotalReturn={showTotalReturn}
-        setShowTotalReturn={setShowTotalReturn}
+        performanceMode={performanceMode}
+        setPerformanceMode={setPerformanceMode}
         typeOptions={availableTypeOptions}
       />
 

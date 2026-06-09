@@ -114,6 +114,20 @@ pub trait LotRepositoryTrait: Send + Sync {
     /// Returns all open (is_closed = 0) lot rows for the given account.
     async fn get_open_lots_for_account(&self, account_id: &str) -> Result<Vec<LotRecord>>;
 
+    /// Returns all open (is_closed = 0) lot rows for the given account and asset.
+    async fn get_open_lots_for_account_asset(
+        &self,
+        account_id: &str,
+        asset_id: &str,
+    ) -> Result<Vec<LotRecord>> {
+        Ok(self
+            .get_open_lots_for_account(account_id)
+            .await?
+            .into_iter()
+            .filter(|lot| lot.asset_id == asset_id)
+            .collect())
+    }
+
     /// Returns all open (is_closed = 0) lot rows across all accounts.
     async fn get_all_open_lots(&self) -> Result<Vec<LotRecord>>;
 
@@ -326,6 +340,7 @@ pub struct AssetLotView {
     pub close_date: Option<String>,
     pub disposal_proceeds: Option<Decimal>,
     pub disposal_cost_basis: Option<Decimal>,
+    pub disposal_cost_basis_base: Option<Decimal>,
     pub realized_pnl: Option<Decimal>,
     pub realized_pnl_base: Option<Decimal>,
 }

@@ -232,7 +232,7 @@ All configuration is done via environment variables in `.env.web`.
 
 **Server Configuration (WF\_\* variables)**:
 
-- `WF_LISTEN_ADDR` - Server bind address (default: `0.0.0.0:8080`)
+- `WF_LISTEN_ADDR` - Server bind address (default: `0.0.0.0:8088`)
 - `WF_DB_PATH` - SQLite database path or directory (default: `./db/app.db`)
   - If a directory is provided, `app.db` will be used inside it
 - `WF_CORS_ALLOW_ORIGINS` - Comma-separated list of allowed CORS origins
@@ -265,7 +265,7 @@ All configuration is done via environment variables in `.env.web`.
 **Vite Configuration**:
 
 - `VITE_API_TARGET` - Backend API URL for Vite proxy (default:
-  `http://127.0.0.1:8080`)
+  `http://127.0.0.1:8088`)
 
 #### Authentication (Web Mode)
 
@@ -331,7 +331,7 @@ The server accepts the same `WF_*` environment variables as documented in the
 or via `.env.web`:
 
 ```bash
-WF_LISTEN_ADDR=127.0.0.1:8080 WF_DB_PATH=./db/app.db cargo run --manifest-path apps/server/Cargo.toml
+WF_LISTEN_ADDR=127.0.0.1:8088 WF_DB_PATH=./db/app.db cargo run --manifest-path apps/server/Cargo.toml
 ```
 
 See [Web Mode Configuration](#configuration) for a complete list of supported
@@ -383,25 +383,26 @@ You can configure the container using either:
 1. **Environment variables** (inline with `-e` flag)
 2. **Environment file** (using `--env-file` flag)
 
-**Option 1: Create an environment file** (recommended for production):
+**Option 1: Create a Docker Compose environment file** (recommended for
+production):
 
 ```bash
-# Create a Docker-specific environment file
-cat > .env.docker << 'EOF'
+SECRET=$(openssl rand -base64 32)
+HASH=$(printf 'your-password' | argon2 yoursalt16chars! -id -e)
+
+cat > .env.docker << EOF
 WF_LISTEN_ADDR=0.0.0.0:8088
 WF_DB_PATH=/data/wealthfolio.db
-WF_SECRET_KEY=<generate-with-openssl-rand>
-WF_CORS_ALLOW_ORIGINS=https://wealthfolio.example.com
+WF_SECRET_KEY='${SECRET}'
+WF_AUTH_PASSWORD_HASH='${HASH}'
+WF_CORS_ALLOW_ORIGINS=http://localhost:8088
 WF_REQUEST_TIMEOUT_MS=30000
 WF_STATIC_DIR=dist
 EOF
 ```
 
-Generate and add your secret key:
-
-```bash
-echo "WF_SECRET_KEY=$(openssl rand -base64 32)" >> .env.docker
-```
+Set `WF_CORS_ALLOW_ORIGINS` to the exact URL you will use in your browser, such
+as `http://192.168.1.10:8088` or `https://wealthfolio.example.com`.
 
 **Option 2: Use inline environment variables** (simpler for testing):
 
@@ -412,30 +413,72 @@ See examples below for inline configuration.
 All examples below use the published image (`wealthfolio/wealthfolio:latest`).
 If you built locally, substitute your local tag (e.g., `wealthfolio`).
 
-**Using environment file** (recommended):
+**Docker Compose** (recommended):
+
+```bash
+docker compose --env-file .env.docker up -d
+```
+
+This publishes the app at `http://localhost:8088` by default. Set `WF_PORT` to
+change the host port:
+
+```bash
+WF_PORT=8090 docker compose --env-file .env.docker up -d
+```
+
+**Docker Compose behind a reverse proxy**:
+
+```bash
+docker compose --env-file .env.docker -f compose.yml -f compose.proxy.yml up -d
+```
+
+Use this when the proxy runs on the same Docker network and forwards traffic to
+`http://wealthfolio:8088`.
+
+**Using Docker CLI environment file**:
+
+Docker CLI `--env-file` keeps `$` characters as-is, so use raw values without
+Compose escaping:
+
+```bash
+SECRET=$(openssl rand -base64 32)
+HASH=$(printf 'your-password' | argon2 yoursalt16chars! -id -e)
+
+cat > .env.docker-run << EOF
+WF_LISTEN_ADDR=0.0.0.0:8088
+WF_DB_PATH=/data/wealthfolio.db
+WF_SECRET_KEY=${SECRET}
+WF_AUTH_PASSWORD_HASH=${HASH}
+WF_CORS_ALLOW_ORIGINS=http://localhost:8088
+WF_REQUEST_TIMEOUT_MS=30000
+WF_STATIC_DIR=dist
+EOF
+```
 
 ```bash
 docker run --rm -d \
   --name wealthfolio \
-  --env-file .env.docker \
+  --env-file .env.docker-run \
   -p 8088:8088 \
   -v wealthfolio-data:/data \
   wealthfolio/wealthfolio:latest
 ```
 
-**Basic usage** (inline environment variables):
+**Basic usage** (inline environment variables, testing only):
 
 ```bash
 docker run --rm -d \
   --name wealthfolio \
   -e WF_LISTEN_ADDR=0.0.0.0:8088 \
   -e WF_DB_PATH=/data/wealthfolio.db \
+  -e WF_SECRET_KEY="$(openssl rand -base64 32)" \
+  -e WF_AUTH_REQUIRED=false \
   -p 8088:8088 \
   -v wealthfolio-data:/data \
   wealthfolio/wealthfolio:latest
 ```
 
-**Development mode** (with CORS for local Vite dev server):
+**Development mode** (with CORS for local Vite dev server, no built-in auth):
 
 ```bash
 docker run --rm -it \
@@ -443,6 +486,8 @@ docker run --rm -it \
   -e WF_LISTEN_ADDR=0.0.0.0:8088 \
   -e WF_DB_PATH=/data/wealthfolio.db \
   -e WF_CORS_ALLOW_ORIGINS=http://localhost:1420 \
+  -e WF_SECRET_KEY="$(openssl rand -base64 32)" \
+  -e WF_AUTH_REQUIRED=false \
   -p 8088:8088 \
   -v wealthfolio-data:/data \
   wealthfolio/wealthfolio:latest
@@ -455,7 +500,9 @@ docker run --rm -d \
   --name wealthfolio \
   -e WF_LISTEN_ADDR=0.0.0.0:8088 \
   -e WF_DB_PATH=/data/wealthfolio.db \
-  -e WF_SECRET_KEY=$(openssl rand -base64 32) \
+  -e WF_SECRET_KEY="$(openssl rand -base64 32)" \
+  -e WF_AUTH_PASSWORD_HASH="$(printf 'your-password' | argon2 yoursalt16chars! -id -e)" \
+  -e WF_CORS_ALLOW_ORIGINS=https://wealthfolio.example.com \
   -p 8088:8088 \
   -v wealthfolio-data:/data \
   wealthfolio/wealthfolio:latest

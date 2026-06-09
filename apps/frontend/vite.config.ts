@@ -5,7 +5,7 @@ import { defineConfig } from "vitest/config";
 
 const host = process.env.TAURI_DEV_HOST;
 const apiTarget =
-  process.env.VITE_API_TARGET || process.env.WF_API_TARGET || "http://127.0.0.1:8080";
+  process.env.VITE_API_TARGET || process.env.WF_API_TARGET || "http://127.0.0.1:8088";
 const enableProxy = process.env.WF_ENABLE_VITE_PROXY === "true";
 const devPort = Number.parseInt(process.env.VITE_DEV_PORT || "1420", 10);
 const serverProxy = enableProxy

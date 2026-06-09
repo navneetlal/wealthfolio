@@ -13,6 +13,8 @@ import { Account, AccountScope, HoldingCategoryFilterId } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { AnimatedToggleGroup, ScrollArea, Separator } from "@wealthfolio/ui";
 
+type PerformanceMode = "daily" | "pnl" | "return";
+
 interface HoldingsMobileFilterSheetProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -25,8 +27,8 @@ interface HoldingsMobileFilterSheetProps {
   showAccountScope?: boolean;
   sortBy: "symbol" | "marketValue";
   setSortBy: (value: "symbol" | "marketValue") => void;
-  showTotalReturn: boolean;
-  setShowTotalReturn: (value: boolean) => void;
+  performanceMode: PerformanceMode;
+  setPerformanceMode: (value: PerformanceMode) => void;
   categoryFilter?: HoldingCategoryFilterId;
   setCategoryFilter?: (value: HoldingCategoryFilterId) => void;
   typeOptions?: { value: string; label: string }[];
@@ -44,8 +46,8 @@ export const HoldingsMobileFilterSheet = ({
   showAccountScope = true,
   sortBy,
   setSortBy,
-  showTotalReturn,
-  setShowTotalReturn,
+  performanceMode,
+  setPerformanceMode,
   categoryFilter = "investments",
   setCategoryFilter,
   typeOptions,
@@ -81,14 +83,15 @@ export const HoldingsMobileFilterSheet = ({
 
               <div className="space-y-3">
                 <h4 className="text-muted-foreground text-xs font-medium uppercase tracking-wider">
-                  Return View
+                  Performance
                 </h4>
-                <AnimatedToggleGroup
-                  value={showTotalReturn ? "total" : "daily"}
-                  onValueChange={(value) => setShowTotalReturn(value === "total")}
+                <AnimatedToggleGroup<PerformanceMode>
+                  value={performanceMode}
+                  onValueChange={setPerformanceMode}
                   items={[
-                    { value: "total", label: "Total Return" },
-                    { value: "daily", label: "Daily Return" },
+                    { value: "daily", label: "Daily" },
+                    { value: "pnl", label: "P&L" },
+                    { value: "return", label: "Return" },
                   ]}
                   size="sm"
                   className="inline-flex w-auto"

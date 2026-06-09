@@ -30,7 +30,7 @@ import { CompactToolCard } from "./shared";
 // ============================================================================
 
 type ViewMode = "table" | "treemap" | "both";
-type ReturnType = "daily" | "total";
+type ReturnType = "daily" | "pnl" | "return";
 
 interface GetHoldingsArgs {
   accountId?: string;
@@ -47,6 +47,12 @@ interface HoldingDto {
   marketValueBase: number;
   costBasisBase?: number | null;
   unrealizedGainPct?: number | null;
+  totalGainBase?: number | null;
+  totalGainPct?: number | null;
+  incomeBase?: number | null;
+  totalReturnBase?: number | null;
+  totalReturnPct?: number | null;
+  returnBasisBase?: number | null;
   dayChangePct?: number | null;
   weight: number;
   currency: string;
@@ -120,6 +126,30 @@ function normalizeResult(result: unknown, fallbackCurrency: string): GetHoldings
       unrealizedGainPct:
         entry.unrealizedGainPct != null || entry.unrealized_gain_pct != null
           ? Number(entry.unrealizedGainPct ?? entry.unrealized_gain_pct)
+          : null,
+      totalGainBase:
+        entry.totalGainBase != null || entry.total_gain_base != null
+          ? Number(entry.totalGainBase ?? entry.total_gain_base)
+          : null,
+      totalGainPct:
+        entry.totalGainPct != null || entry.total_gain_pct != null
+          ? Number(entry.totalGainPct ?? entry.total_gain_pct)
+          : null,
+      incomeBase:
+        entry.incomeBase != null || entry.income_base != null
+          ? Number(entry.incomeBase ?? entry.income_base)
+          : null,
+      totalReturnBase:
+        entry.totalReturnBase != null || entry.total_return_base != null
+          ? Number(entry.totalReturnBase ?? entry.total_return_base)
+          : null,
+      totalReturnPct:
+        entry.totalReturnPct != null || entry.total_return_pct != null
+          ? Number(entry.totalReturnPct ?? entry.total_return_pct)
+          : null,
+      returnBasisBase:
+        entry.returnBasisBase != null || entry.return_basis_base != null
+          ? Number(entry.returnBasisBase ?? entry.return_basis_base)
           : null,
       dayChangePct:
         entry.dayChangePct != null || entry.day_change_pct != null
@@ -333,7 +363,7 @@ function HoldingsContentImpl({ args, result, status }: HoldingsContentProps) {
   const parsed = normalizeResult(result, baseCurrency);
 
   const [returnType, setReturnType] = usePersistentState<ReturnType>(
-    "ai-holdings-return-type",
+    "ai-holdings-performance-mode",
     "daily",
   );
 
@@ -346,16 +376,28 @@ function HoldingsContentImpl({ args, result, status }: HoldingsContentProps) {
   const currency = parsed?.currency ?? baseCurrency;
 
   // Calculate totals for summary
-  const { totalValue, totalGain, totalGainPct } = useMemo(() => {
+  const { totalValue, totalPnl, totalPnlPct, totalReturn, totalReturnPct } = useMemo(() => {
     if (!sortedHoldings.length) {
-      return { totalValue: 0, totalGain: 0, totalGainPct: 0 };
+      return { totalValue: 0, totalPnl: 0, totalPnlPct: 0, totalReturn: 0, totalReturnPct: 0 };
     }
     const value =
       parsed?.totalValue ?? sortedHoldings.reduce((sum, h) => sum + h.marketValueBase, 0);
-    const costBasis = sortedHoldings.reduce((sum, h) => sum + (h.costBasisBase ?? 0), 0);
-    const gain = value - costBasis;
-    const gainPct = costBasis > 0 ? gain / costBasis : 0;
-    return { totalValue: value, totalGain: gain, totalGainPct: gainPct };
+    const basis = sortedHoldings.reduce(
+      (sum, h) => sum + (h.returnBasisBase ?? h.costBasisBase ?? 0),
+      0,
+    );
+    const pnl = sortedHoldings.reduce((sum, h) => sum + (h.totalGainBase ?? 0), 0);
+    const returnAmount = sortedHoldings.reduce(
+      (sum, h) => sum + (h.totalReturnBase ?? h.totalGainBase ?? 0),
+      0,
+    );
+    return {
+      totalValue: value,
+      totalPnl: pnl,
+      totalPnlPct: basis > 0 ? pnl / basis : 0,
+      totalReturn: returnAmount,
+      totalReturnPct: basis > 0 ? returnAmount / basis : 0,
+    };
   }, [parsed?.totalValue, sortedHoldings]);
 
   // Prepare treemap data based on returnType
@@ -369,7 +411,12 @@ function HoldingsContentImpl({ args, result, status }: HoldingsContentProps) {
     const data = sortedHoldings
       .filter((h) => h.marketValueBase > 0)
       .map((h) => {
-        const gain = returnType === "daily" ? (h.dayChangePct ?? 0) : (h.unrealizedGainPct ?? 0);
+        const gain =
+          returnType === "daily"
+            ? (h.dayChangePct ?? 0)
+            : returnType === "return"
+              ? (h.totalReturnPct ?? h.totalGainPct ?? 0)
+              : (h.totalGainPct ?? h.unrealizedGainPct ?? 0);
 
         if (gain !== 0) {
           hasAnyData = true;
@@ -497,7 +544,8 @@ function HoldingsContentImpl({ args, result, status }: HoldingsContentProps) {
   // Determine view mode: use response viewMode, fallback to args, then default to "treemap"
   const viewMode = parsed?.viewMode ?? args?.viewMode ?? "treemap";
   const canShowTreemap = hasData && treemapData.length > 0;
-  const returnLabel = returnType === "daily" ? "Today" : "Total Return";
+  const returnLabel =
+    returnType === "daily" ? "Today" : returnType === "return" ? "Total Return" : "Total P&L";
 
   // Treemap view component
   const TreemapView = () => (
@@ -524,7 +572,8 @@ function HoldingsContentImpl({ args, result, status }: HoldingsContentProps) {
               )}
             >
               {totalChange > 0 ? "+" : ""}
-              {formatPercent(totalChange)} {returnLabel === "Today" ? "today" : "total"}
+              {formatPercent(totalChange)}{" "}
+              {returnType === "daily" ? "today" : returnType === "return" ? "return" : "P&L"}
             </p>
           )}
         </div>
@@ -546,8 +595,14 @@ function HoldingsContentImpl({ args, result, status }: HoldingsContentProps) {
 
   // Table view component
   const TableView = ({ showHeader = true }: { showHeader?: boolean }) => {
-    const gainPct = returnType === "daily" ? totalChange : totalGainPct;
-    const gainAmount = returnType === "daily" ? totalValue * totalChange : totalGain;
+    const gainPct =
+      returnType === "daily" ? totalChange : returnType === "return" ? totalReturnPct : totalPnlPct;
+    const gainAmount =
+      returnType === "daily"
+        ? totalValue * totalChange
+        : returnType === "return"
+          ? totalReturn
+          : totalPnl;
 
     return (
       <>
@@ -594,7 +649,7 @@ function HoldingsContentImpl({ args, result, status }: HoldingsContentProps) {
                 <TableHead className="text-right text-xs">Value</TableHead>
                 <TableHead className="hidden text-right text-xs sm:table-cell">Weight</TableHead>
                 <TableHead className="pr-4 text-right text-xs">
-                  {returnType === "daily" ? "Today" : "Total"}
+                  {returnType === "daily" ? "Today" : returnType === "return" ? "Return" : "P&L"}
                 </TableHead>
               </TableRow>
             </TableHeader>
@@ -603,7 +658,9 @@ function HoldingsContentImpl({ args, result, status }: HoldingsContentProps) {
                 const tableGainPct =
                   returnType === "daily"
                     ? (holding.dayChangePct ?? null)
-                    : (holding.unrealizedGainPct ?? null);
+                    : returnType === "return"
+                      ? (holding.totalReturnPct ?? holding.totalGainPct ?? null)
+                      : (holding.totalGainPct ?? holding.unrealizedGainPct ?? null);
                 return (
                   <TableRow key={`${holding.account}-${holding.symbol}`} className="text-xs">
                     <TableCell className="py-2 pl-4">
@@ -653,7 +710,8 @@ function HoldingsContentImpl({ args, result, status }: HoldingsContentProps) {
     <AnimatedToggleGroup
       items={[
         { value: "daily", label: "Daily" },
-        { value: "total", label: "Total" },
+        { value: "pnl", label: "P&L" },
+        { value: "return", label: "Return" },
       ]}
       value={returnType}
       onValueChange={(value: ReturnType) => setReturnType(value)}

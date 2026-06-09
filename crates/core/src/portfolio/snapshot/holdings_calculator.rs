@@ -28,21 +28,56 @@ fn add_cash(state: &mut AccountStateSnapshot, currency: &str, delta: Decimal) {
         .or_insert(Decimal::ZERO) += delta;
 }
 
+#[derive(Clone)]
+struct AssetPositionInfo {
+    currency: String,
+    is_alternative: bool,
+    contract_multiplier: Decimal,
+    is_bond: bool,
+}
+
+type AssetCache = HashMap<String, AssetPositionInfo>;
+
+impl AssetPositionInfo {
+    fn fallback(activity_currency: &str) -> Self {
+        Self {
+            currency: activity_currency.to_string(),
+            is_alternative: false,
+            contract_multiplier: Decimal::ONE,
+            is_bond: false,
+        }
+    }
+}
+
+fn should_use_activity_amount(activity: &Activity, asset_info: &AssetPositionInfo) -> bool {
+    let has_amount = activity.amount.is_some_and(|amount| !amount.is_zero());
+    if !has_amount {
+        return false;
+    }
+
+    let is_buy_or_sell = matches!(
+        ActivityType::from_str(&activity.activity_type),
+        Ok(ActivityType::Buy | ActivityType::Sell)
+    );
+    if !is_buy_or_sell {
+        return true;
+    }
+
+    let has_qty = activity.quantity.is_some_and(|qty| !qty.is_zero());
+    let has_unit_price = activity.unit_price.is_some_and(|price| !price.is_zero());
+
+    asset_info.is_bond || !has_qty || !has_unit_price
+}
+
 /// Gross trade value (pre-fee) for a BUY/SELL/TRANSFER lot.
-///
-/// When `activity.amount` is present and non-zero it is authoritative — brokers
-/// report it as the settled cash leg, which is correct for bonds quoted on a
-/// per-$100-face convention (qty=face, price=99.x), in-kind transfers (amount
-/// set, price absent), and any case where `qty * price` disagrees with the
-/// booked cash. Falls back to `qty * price * multiplier` when amount is
-/// missing — required for compiler-generated BUY/TRANSFER_IN legs (DRIP,
-/// staking, dividend-in-kind) where the compiler clears `amount` so the
-/// calculator derives the cash leg from qty * price.
+/// Plain trades use qty * price; bonds and incomplete price/quantity rows use
+/// broker amount when present.
 #[inline]
-fn gross_trade_amount(activity: &Activity, multiplier: Decimal) -> Decimal {
-    match activity.amount {
-        Some(a) if !a.is_zero() => a.abs(),
-        _ => activity.qty() * activity.price() * multiplier,
+fn gross_trade_amount(activity: &Activity, asset_info: &AssetPositionInfo) -> Decimal {
+    if should_use_activity_amount(activity, asset_info) {
+        activity.amt()
+    } else {
+        activity.qty() * activity.price() * asset_info.contract_multiplier
     }
 }
 
@@ -56,14 +91,15 @@ fn storage_money(value: Decimal) -> Decimal {
 
 /// Per-share/per-contract acquisition price for a lot (multiplier-inclusive).
 ///
-/// Mirrors `gross_trade_amount`: if `amount` is authoritative, derive the
+/// Mirrors `gross_trade_amount`: when `amount` is authoritative, derive the
 /// per-unit price from it so the lot's cost basis matches the booked cash.
 #[inline]
-fn effective_unit_price(activity: &Activity, multiplier: Decimal) -> Decimal {
+fn effective_unit_price(activity: &Activity, asset_info: &AssetPositionInfo) -> Decimal {
     let qty = activity.qty();
-    match activity.amount {
-        Some(a) if !a.is_zero() && !qty.is_zero() => a.abs() / qty,
-        _ => activity.price() * multiplier,
+    if should_use_activity_amount(activity, asset_info) && !qty.is_zero() {
+        activity.amt() / qty
+    } else {
+        activity.price() * asset_info.contract_multiplier
     }
 }
 
@@ -476,8 +512,7 @@ impl HoldingsCalculator {
         let mut warnings: Vec<HoldingsCalculationWarning> = Vec::new();
 
         // Session-wide asset info cache to avoid DB lookups per unique asset.
-        // Stores (currency, is_alternative, contract_multiplier) for each asset.
-        let mut asset_cache: HashMap<String, (String, bool, Decimal)> = HashMap::new();
+        let mut asset_cache: AssetCache = HashMap::new();
 
         for activity in activities_today {
             if self.activity_local_date(activity) != target_date {
@@ -578,7 +613,7 @@ impl HoldingsCalculator {
         activity: &Activity,
         state: &mut AccountStateSnapshot,
         account_currency: &str,
-        asset_cache: &mut HashMap<String, (String, bool, Decimal)>,
+        asset_cache: &mut AssetCache,
         account_type: Option<&str>,
     ) -> Result<()> {
         let activity_type = ActivityType::from_str(&activity.activity_type).map_err(|_| {
@@ -629,7 +664,7 @@ impl HoldingsCalculator {
         activity: &Activity,
         state: &mut AccountStateSnapshot,
         account_currency: &str,
-        asset_cache: &mut HashMap<String, (String, bool, Decimal)>,
+        asset_cache: &mut AssetCache,
     ) -> Result<()> {
         let activity_currency = &activity.currency;
         let asset_id = activity.asset_id.as_deref().unwrap_or("");
@@ -647,17 +682,13 @@ impl HoldingsCalculator {
         let needs_conversion =
             !position_currency.is_empty() && position_currency != activity.currency;
 
-        // For options, price is per-share but each contract covers `multiplier` shares
-        let multiplier = asset_cache
+        let asset_info = asset_cache
             .get(asset_id)
-            .map(|(_, _, m)| *m)
-            .unwrap_or(Decimal::ONE);
+            .cloned()
+            .unwrap_or_else(|| AssetPositionInfo::fallback(activity_currency));
 
         // Get values for lot, converting if needed.
-        // Prefer the broker-reported `amount` (settled cash, multiplier-inclusive)
-        // when present so lot cost basis matches the booked cash leg; otherwise
-        // fall back to `price * multiplier`.
-        let lot_unit_price = effective_unit_price(activity, multiplier);
+        let lot_unit_price = effective_unit_price(activity, &asset_info);
         let (unit_price_for_lot, fee_for_lot, fx_rate_used) = if needs_conversion {
             let (converted_price, converted_fee, fx_rate) = self.convert_to_position_currency(
                 lot_unit_price,
@@ -682,8 +713,7 @@ impl HoldingsCalculator {
             Some(activity.id.clone()),
         )?;
 
-        // Book cash outflow — prefer broker-reported `amount` when present
-        let total_cost = gross_trade_amount(activity, multiplier) + activity.fee_amt();
+        let total_cost = gross_trade_amount(activity, &asset_info) + activity.fee_amt();
         if activity_currency != account_currency {
             if let Some(fx_rate) = activity.fx_rate.filter(|r| *r != Decimal::ZERO) {
                 // Broker converted at transaction time — book in account currency
@@ -707,7 +737,7 @@ impl HoldingsCalculator {
         activity: &Activity,
         state: &mut AccountStateSnapshot,
         account_currency: &str,
-        asset_cache: &mut HashMap<String, (String, bool, Decimal)>,
+        asset_cache: &mut AssetCache,
     ) -> Result<()> {
         let activity_currency = &activity.currency;
         let asset_id = activity.asset_id.as_deref().unwrap_or("");
@@ -715,12 +745,11 @@ impl HoldingsCalculator {
         // Ensure cache is populated for multiplier lookup
         self.ensure_asset_cached(asset_id, activity_currency, asset_cache);
 
-        // Book cash inflow — prefer broker-reported `amount` when present.
-        let multiplier = asset_cache
+        let asset_info = asset_cache
             .get(asset_id)
-            .map(|(_, _, m)| *m)
-            .unwrap_or(Decimal::ONE);
-        let total_proceeds = gross_trade_amount(activity, multiplier) - activity.fee_amt();
+            .cloned()
+            .unwrap_or_else(|| AssetPositionInfo::fallback(activity_currency));
+        let total_proceeds = gross_trade_amount(activity, &asset_info) - activity.fee_amt();
         if activity_currency != account_currency {
             if let Some(fx_rate) = activity.fx_rate.filter(|r| *r != Decimal::ZERO) {
                 // Broker converted at transaction time — book in account currency
@@ -974,7 +1003,7 @@ impl HoldingsCalculator {
         activity: &Activity,
         state: &mut AccountStateSnapshot,
         account_currency: &str,
-        asset_cache: &mut HashMap<String, (String, bool, Decimal)>,
+        asset_cache: &mut AssetCache,
     ) -> Result<()> {
         let activity_currency = &activity.currency;
         let activity_amount = activity.amt();
@@ -1050,15 +1079,12 @@ impl HoldingsCalculator {
                         activity.id
                     );
                 }
-                // For options, price is per-share but each contract covers `multiplier` shares
-                let multiplier = asset_cache
+                let asset_info = asset_cache
                     .get(asset_id)
-                    .map(|(_, _, m)| *m)
-                    .unwrap_or(Decimal::ONE);
+                    .cloned()
+                    .unwrap_or_else(|| AssetPositionInfo::fallback(activity_currency));
 
-                // Prefer broker-reported `amount` when present so the lot cost
-                // basis matches what actually moved.
-                let lot_unit_price = effective_unit_price(activity, multiplier);
+                let lot_unit_price = effective_unit_price(activity, &asset_info);
                 let (unit_price_for_lot, fee_for_lot, fx_rate_used) = if needs_conversion {
                     let (converted_price, converted_fee, fx_rate) = self
                         .convert_to_position_currency(
@@ -1126,7 +1152,7 @@ impl HoldingsCalculator {
         activity: &Activity,
         state: &mut AccountStateSnapshot,
         account_currency: &str,
-        _asset_cache: &mut HashMap<String, (String, bool, Decimal)>,
+        _asset_cache: &mut AssetCache,
     ) -> Result<()> {
         let activity_currency = &activity.currency;
         let activity_date = self.activity_local_date(activity);
@@ -1267,7 +1293,7 @@ impl HoldingsCalculator {
         &self,
         activity: &Activity,
         state: &mut AccountStateSnapshot,
-        _asset_cache: &mut HashMap<String, (String, bool, Decimal)>,
+        _asset_cache: &mut AssetCache,
     ) -> Result<()> {
         let asset_id = match activity.asset_id.as_deref() {
             Some(id) if !id.is_empty() => id,
@@ -1318,7 +1344,7 @@ impl HoldingsCalculator {
         &self,
         activity: &Activity,
         state: &mut AccountStateSnapshot,
-        _asset_cache: &mut HashMap<String, (String, bool, Decimal)>,
+        _asset_cache: &mut AssetCache,
     ) -> Result<()> {
         use crate::activities::ACTIVITY_SUBTYPE_OPTION_EXPIRY;
 
@@ -1373,21 +1399,16 @@ impl HoldingsCalculator {
     }
 
     /// Populates the asset cache for a given asset_id if not already present.
-    fn ensure_asset_cached(
-        &self,
-        asset_id: &str,
-        activity_currency: &str,
-        cache: &mut HashMap<String, (String, bool, Decimal)>,
-    ) {
+    fn ensure_asset_cached(&self, asset_id: &str, activity_currency: &str, cache: &mut AssetCache) {
         if !asset_id.is_empty() && !cache.contains_key(asset_id) {
-            let (ccy, is_alt, multiplier) = self.get_position_info(asset_id).unwrap_or_else(|_| {
+            let asset_info = self.get_position_info(asset_id).unwrap_or_else(|_| {
                 warn!(
                     "Failed to get asset info for {}, using activity currency {} and multiplier 1",
                     asset_id, activity_currency
                 );
-                (activity_currency.to_string(), false, Decimal::ONE)
+                AssetPositionInfo::fallback(activity_currency)
             });
-            cache.insert(asset_id.to_string(), (ccy, is_alt, multiplier));
+            cache.insert(asset_id.to_string(), asset_info);
         }
     }
 
@@ -1440,15 +1461,21 @@ impl HoldingsCalculator {
         }
     }
 
-    /// Determines the currency, alternative asset flag, and contract multiplier for a position.
-    /// Returns (currency, is_alternative, contract_multiplier).
-    fn get_position_info(&self, asset_id: &str) -> Result<(String, bool, Decimal)> {
+    /// Determines the cached asset facts needed to create and value a position.
+    fn get_position_info(&self, asset_id: &str) -> Result<AssetPositionInfo> {
         debug!("Getting position info for asset_id: {}", asset_id);
         match self.asset_repository.get_by_id(asset_id) {
             Ok(asset) => {
                 let is_alternative = asset.is_alternative();
-                let multiplier = asset.contract_multiplier();
-                Ok((asset.quote_ccy, is_alternative, multiplier))
+                let contract_multiplier = asset.contract_multiplier();
+                let is_bond = asset.is_bond();
+
+                Ok(AssetPositionInfo {
+                    currency: asset.quote_ccy,
+                    is_alternative,
+                    contract_multiplier,
+                    is_bond,
+                })
             }
             Err(e) => {
                 error!("Failed to get asset for asset_id '{}': {}", asset_id, e);
@@ -1547,14 +1574,14 @@ impl HoldingsCalculator {
 
     /// Helper method to get/create position with asset currency caching.
     /// Uses cache to avoid repeated DB lookups for the same asset.
-    /// Cache stores (currency, is_alternative, contract_multiplier) tuple for each asset.
+    /// Cache stores asset facts for each asset.
     fn get_or_create_position_mut_cached<'a>(
         &self,
         state: &'a mut AccountStateSnapshot,
         asset_id: &str,
         activity_currency: &str,
         date: DateTime<Utc>,
-        cache: &mut HashMap<String, (String, bool, Decimal)>,
+        cache: &mut AssetCache,
     ) -> std::result::Result<&'a mut Position, CalculatorError> {
         if asset_id.is_empty() {
             return Err(CalculatorError::InvalidActivity(format!(
@@ -1565,7 +1592,9 @@ impl HoldingsCalculator {
 
         self.ensure_asset_cached(asset_id, activity_currency, cache);
 
-        let (ref position_currency, is_alternative, multiplier) = cache[asset_id];
+        let asset_info = cache
+            .get(asset_id)
+            .expect("asset cache should be populated before position creation");
 
         Ok(state
             .positions
@@ -1574,10 +1603,10 @@ impl HoldingsCalculator {
                 Position::new_with_alternative_flag(
                     state.account_id.clone(),
                     asset_id.to_string(),
-                    position_currency.clone(),
+                    asset_info.currency.clone(),
                     date,
-                    is_alternative,
-                    multiplier,
+                    asset_info.is_alternative,
+                    asset_info.contract_multiplier,
                 )
             }))
     }

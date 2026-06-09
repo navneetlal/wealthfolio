@@ -24,8 +24,6 @@ import { AmountDisplay, QuantityDisplay } from "@wealthfolio/ui";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { AnimatedToggleGroup } from "@wealthfolio/ui";
-
 // Helper function to get display value and currency based on toggle state
 const getDisplayValueAndCurrency = (
   holding: Holding,
@@ -53,14 +51,10 @@ const getDisplayValueAndCurrency = (
 export const HoldingsTable = ({
   holdings,
   isLoading,
-  showTotalReturn = true,
-  setShowTotalReturn,
   onClassify,
 }: {
   holdings: Holding[];
   isLoading: boolean;
-  showTotalReturn?: boolean;
-  setShowTotalReturn?: (value: boolean) => void;
   onClassify?: (holding: Holding) => void;
 }) => {
   const { isBalanceHidden } = useBalancePrivacy();
@@ -113,33 +107,25 @@ export const HoldingsTable = ({
     <div className="flex h-full flex-col">
       <DataTable
         data={holdings}
-        columns={getColumns(isBalanceHidden, showConvertedValues, showTotalReturn, onClassify)}
+        columns={getColumns(isBalanceHidden, showConvertedValues, onClassify)}
         searchBy="symbol"
         filters={filters}
         showColumnToggle={true}
-        storageKey="holdings-table"
+        storageKey="holdings-table-v2"
         defaultColumnVisibility={{
           currency: false,
           symbolName: false,
           holdingType: false,
           bookValue: false,
+          totalPnl: false,
+          unrealizedPnl: false,
+          income: false,
+          dayPnl: false,
         }}
         defaultSorting={[{ id: "symbol", desc: false }]}
         scrollable={true}
         toolbarActions={
           <div className="mr-2 flex items-center gap-2">
-            {setShowTotalReturn && (
-              <AnimatedToggleGroup
-                value={showTotalReturn ? "total" : "daily"}
-                onValueChange={(value) => setShowTotalReturn(value === "total")}
-                items={[
-                  { value: "total", label: "Total" },
-                  { value: "daily", label: "Daily" },
-                ]}
-                size="xs"
-                rounded="md"
-              />
-            )}
             {hasMultipleCurrencies && (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -173,7 +159,6 @@ export default HoldingsTable;
 const getColumns = (
   isHidden: boolean,
   showConvertedValues: boolean,
-  showTotalReturn: boolean,
   onClassify?: (holding: Holding) => void,
 ): ColumnDef<Holding>[] => [
   {
@@ -383,34 +368,26 @@ const getColumns = (
     },
   },
   {
-    id: "performance",
+    id: "totalPnl",
     accessorFn: (row) => row.totalGain?.base ?? 0,
-    enableHiding: false,
+    enableHiding: true,
     header: ({ column }) => (
-      <DataTableColumnHeader
-        className="justify-end"
-        column={column}
-        title={showTotalReturn ? "Unrealized Gain" : "Day Change"}
-      />
+      <DataTableColumnHeader className="justify-end" column={column} title="Total P&L" />
     ),
     meta: {
-      label: "Unrealized Gain",
+      label: "Total P&L",
     },
     cell: ({ row }) => {
       const holding = row.original;
-      const valueBase = showTotalReturn ? holding.totalGain?.base : holding.dayChange?.base;
-      const pct = showTotalReturn ? holding.totalGainPct : holding.dayChangePct;
-
-      const { value, currency } = getDisplayValueAndCurrency(
-        holding,
-        valueBase,
-        showConvertedValues,
-      );
+      const value = showConvertedValues
+        ? (holding.totalGain?.base ?? 0)
+        : (holding.totalGain?.local ?? 0);
+      const currency = showConvertedValues ? holding.baseCurrency : holding.localCurrency;
 
       return (
         <div className="flex min-h-[40px] flex-col items-end justify-center px-4">
           <AmountDisplay value={value} currency={currency} colorFormat={true} isHidden={isHidden} />
-          <GainPercent className="text-xs" value={pct || 0} />
+          <GainPercent className="text-xs" value={holding.totalGainPct || 0} />
         </div>
       );
     },
@@ -419,9 +396,129 @@ const getColumns = (
       const holdingB = rowB.original;
 
       // Always sort by base currency value for consistency
-      const valueA = (showTotalReturn ? holdingA.totalGain?.base : holdingA.dayChange?.base) ?? 0;
-      const valueB = (showTotalReturn ? holdingB.totalGain?.base : holdingB.dayChange?.base) ?? 0;
+      const valueA = holdingA.totalGain?.base ?? 0;
+      const valueB = holdingB.totalGain?.base ?? 0;
 
+      return valueA - valueB;
+    },
+  },
+  {
+    id: "totalReturn",
+    accessorFn: (row) => row.totalReturn?.base ?? row.totalGain?.base ?? 0,
+    enableHiding: true,
+    header: ({ column }) => (
+      <DataTableColumnHeader className="justify-end" column={column} title="Total Return" />
+    ),
+    meta: {
+      label: "Total Return",
+    },
+    cell: ({ row }) => {
+      const holding = row.original;
+      const value = showConvertedValues
+        ? (holding.totalReturn?.base ?? 0)
+        : (holding.totalReturn?.local ?? 0);
+      const currency = showConvertedValues ? holding.baseCurrency : holding.localCurrency;
+
+      return (
+        <div className="flex min-h-[40px] flex-col items-end justify-center px-4">
+          <AmountDisplay value={value} currency={currency} colorFormat={true} isHidden={isHidden} />
+          <GainPercent className="text-xs" value={holding.totalReturnPct || 0} />
+        </div>
+      );
+    },
+    sortingFn: (rowA, rowB) => {
+      const valueA = rowA.original.totalReturn?.base ?? rowA.original.totalGain?.base ?? 0;
+      const valueB = rowB.original.totalReturn?.base ?? rowB.original.totalGain?.base ?? 0;
+      return valueA - valueB;
+    },
+  },
+  {
+    id: "dayPnl",
+    accessorFn: (row) => row.dayChange?.base ?? 0,
+    enableHiding: true,
+    header: ({ column }) => (
+      <DataTableColumnHeader className="justify-end" column={column} title="Day P&L" />
+    ),
+    meta: {
+      label: "Day P&L",
+    },
+    cell: ({ row }) => {
+      const holding = row.original;
+      const value = showConvertedValues
+        ? (holding.dayChange?.base ?? 0)
+        : (holding.dayChange?.local ?? 0);
+      const currency = showConvertedValues ? holding.baseCurrency : holding.localCurrency;
+
+      return (
+        <div className="flex min-h-[40px] flex-col items-end justify-center px-4">
+          <AmountDisplay value={value} currency={currency} colorFormat={true} isHidden={isHidden} />
+          <GainPercent className="text-xs" value={holding.dayChangePct || 0} />
+        </div>
+      );
+    },
+    sortingFn: (rowA, rowB) => {
+      const valueA = rowA.original.dayChange?.base ?? 0;
+      const valueB = rowB.original.dayChange?.base ?? 0;
+      return valueA - valueB;
+    },
+  },
+  {
+    id: "unrealizedPnl",
+    accessorFn: (row) => row.unrealizedGain?.base ?? 0,
+    enableHiding: true,
+    header: ({ column }) => (
+      <DataTableColumnHeader className="justify-end" column={column} title="Unrealized P&L" />
+    ),
+    meta: {
+      label: "Unrealized P&L",
+    },
+    cell: ({ row }) => {
+      const holding = row.original;
+      const value = showConvertedValues
+        ? (holding.unrealizedGain?.base ?? 0)
+        : (holding.unrealizedGain?.local ?? 0);
+      const currency = showConvertedValues ? holding.baseCurrency : holding.localCurrency;
+
+      return (
+        <div className="flex min-h-[40px] flex-col items-end justify-center px-4">
+          <AmountDisplay value={value} currency={currency} colorFormat={true} isHidden={isHidden} />
+          <GainPercent className="text-xs" value={holding.unrealizedGainPct || 0} />
+        </div>
+      );
+    },
+    sortingFn: (rowA, rowB) => {
+      const valueA = rowA.original.unrealizedGain?.base ?? 0;
+      const valueB = rowB.original.unrealizedGain?.base ?? 0;
+      return valueA - valueB;
+    },
+  },
+  {
+    id: "income",
+    accessorFn: (row) => row.income?.base ?? 0,
+    enableHiding: true,
+    header: ({ column }) => (
+      <DataTableColumnHeader className="justify-end" column={column} title="Income" />
+    ),
+    meta: {
+      label: "Income",
+    },
+    cell: ({ row }) => {
+      const holding = row.original;
+      const value = showConvertedValues
+        ? (holding.income?.base ?? 0)
+        : (holding.income?.local ?? 0);
+      const currency = showConvertedValues ? holding.baseCurrency : holding.localCurrency;
+
+      return (
+        <div className="flex min-h-[40px] flex-col items-end justify-center px-4">
+          <AmountDisplay value={value} currency={currency} colorFormat={true} isHidden={isHidden} />
+          <div className="text-xs text-transparent">-</div>
+        </div>
+      );
+    },
+    sortingFn: (rowA, rowB) => {
+      const valueA = rowA.original.income?.base ?? 0;
+      const valueB = rowB.original.income?.base ?? 0;
       return valueA - valueB;
     },
   },

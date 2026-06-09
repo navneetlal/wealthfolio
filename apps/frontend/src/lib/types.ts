@@ -644,6 +644,7 @@ export interface AssetLotView {
   closeDate?: string | null;
   disposalProceeds?: number | null;
   disposalCostBasis?: number | null;
+  disposalCostBasisBase?: number | null;
   realizedPnl?: number | null;
   realizedPnlBase?: number | null;
 }
@@ -690,6 +691,10 @@ export interface Holding {
   realizedGainPct?: number | null;
   totalGain?: MonetaryValue | null;
   totalGainPct?: number | null;
+  income?: MonetaryValue | null;
+  totalReturn?: MonetaryValue | null;
+  totalReturnPct?: number | null;
+  returnBasis?: MonetaryValue | null;
   dayChange?: MonetaryValue | null;
   dayChangePct?: number | null;
   prevCloseValue?: MonetaryValue | null;

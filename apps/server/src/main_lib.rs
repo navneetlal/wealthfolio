@@ -434,6 +434,7 @@ pub async fn build_state(config: &Config) -> anyhow::Result<Arc<AppState>> {
             classification_service.clone(),
             timezone.clone(),
         )
+        .with_income_dependencies(activity_repository.clone(), fx_service.clone())
         .with_lot_repository(lots_repository.clone()),
     );
 

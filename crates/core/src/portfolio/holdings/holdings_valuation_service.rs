@@ -60,8 +60,14 @@ impl HoldingsValuationService {
         from_curr: &str,
         to_curr: &str,
         context_msg: &str,
+        fx_cache: &mut HashMap<(String, String), Decimal>,
     ) -> Decimal {
-        match self.fx_service.get_latest_exchange_rate(from_curr, to_curr) {
+        let cache_key = (from_curr.to_string(), to_curr.to_string());
+        if let Some(rate) = fx_cache.get(&cache_key) {
+            return *rate;
+        }
+
+        let rate = match self.fx_service.get_latest_exchange_rate(from_curr, to_curr) {
             Ok(rate) => rate,
             Err(e) => {
                 warn!(
@@ -70,7 +76,9 @@ impl HoldingsValuationService {
                 );
                 Decimal::ONE // Fallback
             }
-        }
+        };
+        fx_cache.insert(cache_key, rate);
+        rate
     }
 
     // Helper to fetch necessary market data in batches
@@ -120,6 +128,7 @@ impl HoldingsValuationServiceTrait for HoldingsValuationService {
             self.fetch_batch_quote_data(holdings).await?;
 
         let today = self.today_in_user_timezone();
+        let mut fx_cache: HashMap<(String, String), Decimal> = HashMap::new();
 
         for holding in holdings.iter_mut() {
             match holding.holding_type {
@@ -134,8 +143,13 @@ impl HoldingsValuationServiceTrait for HoldingsValuationService {
                         holding.as_of_date = today;
                     }
                     let base_currency = holding.base_currency.clone();
-                    self.calculate_security_valuation(holding, &base_currency, &latest_quote_pairs)
-                        .await?;
+                    self.calculate_security_valuation(
+                        holding,
+                        &base_currency,
+                        &latest_quote_pairs,
+                        &mut fx_cache,
+                    )
+                    .await?;
                 }
                 HoldingType::AlternativeAsset => {
                     // Use asset ID for quote lookups
@@ -152,13 +166,14 @@ impl HoldingsValuationServiceTrait for HoldingsValuationService {
                         holding,
                         &base_currency,
                         &latest_quote_pairs,
+                        &mut fx_cache,
                     )
                     .await?;
                 }
                 HoldingType::Cash => {
                     holding.as_of_date = today;
                     let base_currency = holding.base_currency.clone();
-                    self.calculate_cash_valuation(holding, &base_currency)?;
+                    self.calculate_cash_valuation(holding, &base_currency, &mut fx_cache)?;
                 }
             }
         }
@@ -176,6 +191,7 @@ impl HoldingsValuationService {
         holding: &mut Holding,
         base_currency: &str,
         latest_quote_pairs: &HashMap<String, LatestQuotePair>,
+        fx_cache: &mut HashMap<(String, String), Decimal>,
     ) -> Result<()> {
         let instrument = match &holding.instrument {
             Some(inst) => inst,
@@ -199,12 +215,15 @@ impl HoldingsValuationService {
             pos_currency,
             base_currency,
             &format!("{}: FX Local->Base", context_msg),
+            fx_cache,
         );
         holding.fx_rate = Some(fx_rate_local_to_base);
 
         // --- Calculate Base Cost Basis (If applicable) ---
         if let Some(cost_basis) = &mut holding.cost_basis {
-            cost_basis.base = cost_basis.local * fx_rate_local_to_base;
+            if cost_basis.base.is_zero() && !cost_basis.local.is_zero() {
+                cost_basis.base = cost_basis.local * fx_rate_local_to_base;
+            }
         } else {
             warn!("{}: Cost basis local value missing...", context_msg);
         }
@@ -281,6 +300,7 @@ impl HoldingsValuationService {
                 normalized_quote_currency,
                 base_currency,
                 &format!("{}: FX Quote->Base", context_msg),
+                fx_cache,
             );
 
             let market_value_quote_major =
@@ -290,6 +310,7 @@ impl HoldingsValuationService {
                 normalized_quote_currency,
                 pos_currency,
                 &format!("{}: FX Quote->Local", context_msg),
+                fx_cache,
             );
             let market_price_local = normalized_price * fx_rate_quote_to_local;
             holding.price = Some(market_price_local);
@@ -420,6 +441,7 @@ impl HoldingsValuationService {
         holding: &mut Holding,
         base_currency: &str,
         latest_quote_pairs: &HashMap<String, LatestQuotePair>,
+        fx_cache: &mut HashMap<(String, String), Decimal>,
     ) -> Result<()> {
         let instrument = match &holding.instrument {
             Some(inst) => inst,
@@ -447,6 +469,7 @@ impl HoldingsValuationService {
             pos_currency,
             base_currency,
             &format!("{}: FX Local->Base", context_msg),
+            fx_cache,
         );
         holding.fx_rate = Some(fx_rate_local_to_base);
 
@@ -486,12 +509,14 @@ impl HoldingsValuationService {
                 normalized_quote_currency,
                 base_currency,
                 &format!("{}: FX Quote->Base", context_msg),
+                fx_cache,
             );
 
             let fx_rate_quote_to_local = self.get_fx_rate_or_fallback(
                 normalized_quote_currency,
                 pos_currency,
                 &format!("{}: FX Quote->Local", context_msg),
+                fx_cache,
             );
 
             // --- Calculate Market Value ---
@@ -599,7 +624,12 @@ impl HoldingsValuationService {
         Ok(())
     }
 
-    fn calculate_cash_valuation(&self, holding: &mut Holding, base_currency: &str) -> Result<()> {
+    fn calculate_cash_valuation(
+        &self,
+        holding: &mut Holding,
+        base_currency: &str,
+        fx_cache: &mut HashMap<(String, String), Decimal>,
+    ) -> Result<()> {
         let cash_currency = &holding.local_currency;
         let cash_amount = holding.quantity;
         let context_msg = format!("HoldingValuation [CASH {}]", cash_currency);
@@ -608,7 +638,7 @@ impl HoldingsValuationService {
         holding.price = Some(dec!(1.0));
 
         let fx_rate_cash_to_base =
-            self.get_fx_rate_or_fallback(cash_currency, base_currency, &context_msg);
+            self.get_fx_rate_or_fallback(cash_currency, base_currency, &context_msg, fx_cache);
         holding.fx_rate = Some(fx_rate_cash_to_base);
 
         let value_base = cash_amount * fx_rate_cash_to_base;

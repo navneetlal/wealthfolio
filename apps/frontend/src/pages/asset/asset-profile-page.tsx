@@ -13,6 +13,7 @@ import { useIsMobileViewport } from "@/hooks/use-platform";
 import { useQuoteHistory } from "@/hooks/use-quote-history";
 import { useSyncMarketDataMutation } from "@/hooks/use-sync-market-data";
 import { useAssetTaxonomyAssignments, useTaxonomy } from "@/hooks/use-taxonomies";
+import { ActivityStatus, ActivityType } from "@/lib/constants";
 import { generateId } from "@/lib/id";
 import { QueryKeys } from "@/lib/query-keys";
 import { useSettingsContext } from "@/lib/settings-provider";
@@ -96,6 +97,8 @@ interface AssetDetailData {
   priceReturnPercent: number | null;
   totalPnl: number | null;
   totalPnlPercent: number | null;
+  totalReturn: number | null;
+  totalReturnPercent: number | null;
   currency: string;
   baseCurrency: string;
   quoteCurrency: string | null;
@@ -549,8 +552,13 @@ export const AssetProfilePage = () => {
       baseCurrency;
     const quantity = Number(holding?.quantity ?? 0);
 
+    const contractMultiplier = Number(holding?.contractMultiplier ?? 1);
+    const costUnits =
+      optionSpec && contractMultiplier > 0 ? quantity * contractMultiplier : quantity;
     const averageCostPrice =
-      holding?.costBasis?.local && quantity !== 0 ? Number(holding.costBasis.local) / quantity : 0;
+      holding?.costBasis?.local && costUnits !== 0
+        ? Number(holding.costBasis.local) / costUnits
+        : 0;
 
     const quoteData = quote
       ? {
@@ -579,18 +587,22 @@ export const AssetProfilePage = () => {
             return first && last != null && first !== 0 ? Number(last / first - 1) : null;
           })()
         : null;
-    const incomeActivities = assetActivities.filter((activity) =>
-      ["DIVIDEND", "INTEREST", "INCOME"].includes(activity.activityType),
+    const incomeActivities = assetActivities.filter(
+      (activity) =>
+        activity.assetId === assetId &&
+        activity.status === ActivityStatus.POSTED &&
+        (activity.activityType === ActivityType.DIVIDEND ||
+          activity.activityType === ActivityType.INTEREST),
     );
-    const hasNonDisplayIncome = incomeActivities.some(
-      (activity) => activity.currency !== displayCurrency,
-    );
-    const income = hasNonDisplayIncome
+    const fallbackIncome = incomeActivities.some(
+      (activity) => activity.currency.toUpperCase() !== displayCurrency.toUpperCase(),
+    )
       ? null
       : incomeActivities.reduce((sum, activity) => {
           const amount = Number(activity.amount ?? 0);
           return Number.isFinite(amount) ? sum + amount : sum;
         }, 0);
+    const income = holding?.income?.local != null ? Number(holding.income.local) : fallbackIncome;
     const realizedLots = assetLots.filter(
       (lot) => lot.source === "TRANSACTION_LOT" && lot.realizedPnl != null,
     );
@@ -598,8 +610,12 @@ export const AssetProfilePage = () => {
       (sum, lot) => sum + Number(lot.realizedPnl ?? 0),
       0,
     );
-    const realizedCostBasisFromLots = realizedLots.reduce(
-      (sum, lot) => sum + Number(lot.disposalCostBasis ?? 0),
+    const realizedPnlBaseFromLots = realizedLots.reduce(
+      (sum, lot) => sum + Number(lot.realizedPnlBase ?? 0),
+      0,
+    );
+    const realizedCostBasisBaseFromLots = realizedLots.reduce(
+      (sum, lot) => sum + Number(lot.disposalCostBasisBase ?? 0),
       0,
     );
     const realizedPnl =
@@ -611,22 +627,42 @@ export const AssetProfilePage = () => {
     const realizedPnlPercent =
       holding?.realizedGainPct != null
         ? Number(holding.realizedGainPct)
-        : realizedLots.length > 0 && realizedCostBasisFromLots > 0
-          ? realizedPnlFromLots / realizedCostBasisFromLots
+        : realizedLots.length > 0 && realizedCostBasisBaseFromLots > 0
+          ? realizedPnlBaseFromLots / realizedCostBasisBaseFromLots
           : null;
-    const acquisitionCostBasisBase = assetLots
-      .filter(
-        (lot) => lot.source === "TRANSACTION_LOT" && !lot.isClosed && lot.costBasisBase != null,
-      )
-      .reduce((sum, lot) => sum + Number(lot.costBasisBase ?? 0), 0);
+    const hasOpenTransactionLotWithBase = assetLots.some(
+      (lot) => lot.source === "TRANSACTION_LOT" && !lot.isClosed && lot.costBasisBase != null,
+    );
     const fxEffect =
-      acquisitionCostBasisBase > 0 && holding?.costBasis?.base != null
-        ? Number(holding.costBasis.base) - acquisitionCostBasisBase
+      hasOpenTransactionLotWithBase &&
+      holding?.unrealizedGain?.base != null &&
+      holding?.unrealizedGain?.local != null &&
+      holding?.fxRate != null
+        ? Number(holding.unrealizedGain.base) -
+          Number(holding.unrealizedGain.local) * Number(holding.fxRate)
         : null;
     const totalPnl =
       holding?.totalGain?.local != null ? Number(holding.totalGain.local) : realizedPnl;
     const totalPnlPercent =
       holding?.totalGainPct != null ? Number(holding.totalGainPct) : realizedPnlPercent;
+    const totalReturn =
+      holding?.totalReturn?.local != null
+        ? Number(holding.totalReturn.local)
+        : totalPnl != null && income != null
+          ? totalPnl + income
+          : null;
+    const fallbackReturnBasisBase =
+      holding?.returnBasis?.base != null
+        ? Number(holding.returnBasis.base)
+        : realizedCostBasisBaseFromLots;
+    const canUseFallbackTotalReturnPercent =
+      holding == null && displayCurrency.toUpperCase() === baseCurrency.toUpperCase();
+    const totalReturnPercent =
+      holding?.totalReturnPct != null
+        ? Number(holding.totalReturnPct)
+        : totalReturn != null && fallbackReturnBasisBase > 0 && canUseFallbackTotalReturnPercent
+          ? totalReturn / fallbackReturnBasisBase
+          : null;
 
     return {
       numShares: quantity,
@@ -647,6 +683,8 @@ export const AssetProfilePage = () => {
       priceReturnPercent,
       totalPnl,
       totalPnlPercent,
+      totalReturn,
+      totalReturnPercent,
       currency: displayCurrency,
       baseCurrency: holding?.baseCurrency ?? baseCurrency,
       quoteCurrency: quoteData?.quoteCurrency ?? null,
@@ -661,6 +699,7 @@ export const AssetProfilePage = () => {
     assetActivities,
     assetLots,
     assetProfile,
+    assetId,
     bondSpec,
     optionSpec,
     baseCurrency,

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FC, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type FC, type ReactNode } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   Bar,
@@ -271,12 +271,31 @@ function selectionFromParams(
   persistedInterval: string,
   persistedMonth: string | null,
 ): SpendingSelection {
-  const restoreCode = normalizeSpendingDashboardPeriod(
-    params.get("spendingInterval") ?? persistedInterval,
-  );
-  const monthKey = params.get(MONTH_PARAM) ?? persistedMonth;
+  const intervalParam = params.get("spendingInterval");
+  const monthParam = params.get(MONTH_PARAM);
+  const restoreCode = normalizeSpendingDashboardPeriod(intervalParam ?? persistedInterval);
+  const monthKey = monthParam ?? (intervalParam === null ? persistedMonth : null);
   if (monthKey && parseMonthKey(monthKey)) return { kind: "month", monthKey, restoreCode };
   return { kind: "period", code: restoreCode };
+}
+
+function budgetMonthStateForSelection(
+  selection: SpendingSelection,
+  currentMonthKey: string,
+): { monthKey: string; touched: boolean } {
+  if (selection.kind === "period" && selection.code === "LAST_MONTH") {
+    return { monthKey: addMonthsToMonthKey(currentMonthKey, -1), touched: true };
+  }
+  if (selection.kind === "month" && selection.monthKey <= currentMonthKey) {
+    return { monthKey: selection.monthKey, touched: true };
+  }
+  return { monthKey: currentMonthKey, touched: false };
+}
+
+function budgetSelectionSyncKey(selection: SpendingSelection, currentMonthKey: string): string {
+  if (selection.kind === "month") return `month:${selection.monthKey}`;
+  if (selection.code === "LAST_MONTH") return `period:${selection.code}:${currentMonthKey}`;
+  return `period:${selection.code}`;
 }
 
 function selectionData(selection: SpendingSelection, timezone?: string | null) {
@@ -492,18 +511,24 @@ export default function SpendingTabContent() {
   const { data: budget, isError: budgetErrored } = useBudget();
   const todayParts = useMemo(() => getZonedDateParts(new Date(), appTimezone), [appTimezone]);
   const currentBudgetMonthKey = useMemo(() => monthKeyFromParts(todayParts), [todayParts]);
-  const [budgetMonthKey, setBudgetMonthKey] = useState(() => {
-    const current = monthKeyFromParts(todayParts);
-    if (selection.kind === "period" && selection.code === "LAST_MONTH")
-      return addMonthsToMonthKey(current, -1);
-    if (selection.kind === "month" && selection.monthKey <= current) return selection.monthKey;
-    return current;
-  });
-  const [budgetMonthTouched, setBudgetMonthTouched] = useState(
-    () =>
-      (selection.kind === "period" && selection.code === "LAST_MONTH") ||
-      selection.kind === "month",
+  const budgetSyncKey = useMemo(
+    () => budgetSelectionSyncKey(selection, currentBudgetMonthKey),
+    [selection, currentBudgetMonthKey],
   );
+  const lastBudgetSyncKey = useRef(budgetSyncKey);
+  const [budgetMonthKey, setBudgetMonthKey] = useState(() => {
+    return budgetMonthStateForSelection(selection, currentBudgetMonthKey).monthKey;
+  });
+  const [budgetMonthTouched, setBudgetMonthTouched] = useState(() => {
+    return budgetMonthStateForSelection(selection, currentBudgetMonthKey).touched;
+  });
+  useEffect(() => {
+    if (lastBudgetSyncKey.current === budgetSyncKey) return;
+    lastBudgetSyncKey.current = budgetSyncKey;
+    const next = budgetMonthStateForSelection(selection, currentBudgetMonthKey);
+    setBudgetMonthKey(next.monthKey);
+    setBudgetMonthTouched(next.touched);
+  }, [budgetSyncKey, currentBudgetMonthKey, selection]);
   useEffect(() => {
     setBudgetMonthKey((monthKey) => {
       if (!budgetMonthTouched) return currentBudgetMonthKey;

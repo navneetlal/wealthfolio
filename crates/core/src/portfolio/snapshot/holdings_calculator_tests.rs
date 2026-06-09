@@ -78,6 +78,22 @@ mod tests {
             };
             self.assets.insert(symbol.to_string(), asset);
         }
+
+        fn add_bond_asset(&mut self, symbol: &str, currency: &str) {
+            let asset = Asset {
+                id: symbol.to_string(),
+                display_code: Some(symbol.to_string()),
+                quote_ccy: currency.to_string(),
+                name: Some(format!("Mock Bond {}", symbol)),
+                kind: AssetKind::Investment,
+                quote_mode: QuoteMode::Market,
+                instrument_type: Some(InstrumentType::Bond),
+                created_at: Utc::now().naive_utc(),
+                updated_at: Utc::now().naive_utc(),
+                ..Default::default()
+            };
+            self.assets.insert(symbol.to_string(), asset);
+        }
     }
 
     #[async_trait::async_trait]
@@ -1490,6 +1506,217 @@ mod tests {
         assert_eq!(next_state.cost_basis, dec!(0));
         assert_eq!(next_state.net_contribution, dec!(0));
         assert_eq!(next_state.net_contribution_base, dec!(0));
+    }
+
+    #[test]
+    fn test_trade_amount_policy_equity_buy_ignores_inflated_amount() {
+        let mock_fx_service = Arc::new(MockFxService::new());
+        let account_currency = "USD";
+        let base_currency = Arc::new(RwLock::new(account_currency.to_string()));
+        let calculator = create_calculator(mock_fx_service, base_currency);
+
+        let target_date_str = "2025-03-10";
+        let target_date = NaiveDate::from_str(target_date_str).unwrap();
+        let previous_snapshot = create_initial_snapshot("acc_1", account_currency, "2025-03-09");
+
+        let mut buy = create_default_activity(
+            "act_buy_inflated_amount",
+            ActivityType::Buy,
+            "AAPL",
+            dec!(10),
+            dec!(99.76),
+            dec!(4.90),
+            account_currency,
+            target_date_str,
+        );
+        buy.amount = Some(dec!(9976));
+
+        let result = calculator.calculate_next_holdings(&previous_snapshot, &[buy], target_date);
+        assert!(result.is_ok(), "Calculation failed: {:?}", result.err());
+        let next_state = result.unwrap().snapshot;
+
+        let position = next_state.positions.get("AAPL").unwrap();
+        assert_eq!(position.quantity, dec!(10));
+        assert_eq!(position.average_cost, dec!(100.25));
+        assert_eq!(position.total_cost_basis, dec!(1002.50));
+        assert_eq!(position.lots[0].acquisition_price, dec!(99.76));
+        assert_eq!(
+            next_state.cash_balances.get(account_currency),
+            Some(&dec!(-1002.50))
+        );
+        assert_eq!(next_state.cost_basis, dec!(1002.50));
+    }
+
+    #[test]
+    fn test_trade_amount_policy_equity_sell_ignores_inflated_amount() {
+        let mock_fx_service = Arc::new(MockFxService::new());
+        let account_currency = "USD";
+        let base_currency = Arc::new(RwLock::new(account_currency.to_string()));
+        let calculator = create_calculator(mock_fx_service, base_currency);
+
+        let previous_snapshot = create_initial_snapshot("acc_1", account_currency, "2025-03-08");
+        let buy_date = NaiveDate::from_str("2025-03-09").unwrap();
+        let buy = create_default_activity(
+            "act_buy_before_bad_sell",
+            ActivityType::Buy,
+            "AAPL",
+            dec!(10),
+            dec!(50),
+            dec!(0),
+            account_currency,
+            "2025-03-09",
+        );
+        let after_buy = calculator
+            .calculate_next_holdings(&previous_snapshot, &[buy], buy_date)
+            .unwrap()
+            .snapshot;
+
+        let sell_date = NaiveDate::from_str("2025-03-10").unwrap();
+        let mut sell = create_default_activity(
+            "act_sell_inflated_amount",
+            ActivityType::Sell,
+            "AAPL",
+            dec!(5),
+            dec!(60),
+            dec!(1),
+            account_currency,
+            "2025-03-10",
+        );
+        sell.amount = Some(dec!(6000));
+
+        let result = calculator.calculate_next_holdings(&after_buy, &[sell], sell_date);
+        assert!(result.is_ok(), "Calculation failed: {:?}", result.err());
+        let next_state = result.unwrap().snapshot;
+
+        let position = next_state.positions.get("AAPL").unwrap();
+        assert_eq!(position.quantity, dec!(5));
+        assert_eq!(position.average_cost, dec!(50));
+        assert_eq!(position.total_cost_basis, dec!(250));
+        assert_eq!(
+            next_state.cash_balances.get(account_currency),
+            Some(&dec!(-201))
+        );
+        assert_eq!(next_state.cost_basis, dec!(250));
+    }
+
+    #[test]
+    fn test_trade_amount_policy_bond_buy_uses_amount_when_present() {
+        let mock_fx_service = MockFxService::new();
+        let account_currency = "USD";
+        let base_currency = Arc::new(RwLock::new(account_currency.to_string()));
+        let mut repo = MockAssetRepository::new();
+        repo.add_bond_asset("US912828ZT58", account_currency);
+        let calculator =
+            HoldingsCalculator::new(Arc::new(mock_fx_service), base_currency, Arc::new(repo));
+
+        let target_date_str = "2025-03-10";
+        let target_date = NaiveDate::from_str(target_date_str).unwrap();
+        let previous_snapshot = create_initial_snapshot("acc_1", account_currency, "2025-03-09");
+
+        let mut buy = create_default_activity(
+            "act_bond_buy_amount",
+            ActivityType::Buy,
+            "US912828ZT58",
+            dec!(1000),
+            dec!(99),
+            dec!(0),
+            account_currency,
+            target_date_str,
+        );
+        buy.amount = Some(dec!(990));
+
+        let result = calculator.calculate_next_holdings(&previous_snapshot, &[buy], target_date);
+        assert!(result.is_ok(), "Calculation failed: {:?}", result.err());
+        let next_state = result.unwrap().snapshot;
+
+        let position = next_state.positions.get("US912828ZT58").unwrap();
+        assert_eq!(position.quantity, dec!(1000));
+        assert_eq!(position.average_cost, dec!(0.99));
+        assert_eq!(position.total_cost_basis, dec!(990));
+        assert_eq!(
+            next_state.cash_balances.get(account_currency),
+            Some(&dec!(-990))
+        );
+        assert_eq!(next_state.cost_basis, dec!(990));
+    }
+
+    #[test]
+    fn test_trade_amount_policy_buy_with_missing_price_uses_amount() {
+        let mock_fx_service = Arc::new(MockFxService::new());
+        let account_currency = "USD";
+        let base_currency = Arc::new(RwLock::new(account_currency.to_string()));
+        let calculator = create_calculator(mock_fx_service, base_currency);
+
+        let target_date_str = "2025-03-10";
+        let target_date = NaiveDate::from_str(target_date_str).unwrap();
+        let previous_snapshot = create_initial_snapshot("acc_1", account_currency, "2025-03-09");
+
+        let mut buy = create_default_activity(
+            "act_buy_missing_price_amount",
+            ActivityType::Buy,
+            "AAPL",
+            dec!(10),
+            dec!(0),
+            dec!(4.90),
+            account_currency,
+            target_date_str,
+        );
+        buy.amount = Some(dec!(997.60));
+
+        let result = calculator.calculate_next_holdings(&previous_snapshot, &[buy], target_date);
+        assert!(result.is_ok(), "Calculation failed: {:?}", result.err());
+        let next_state = result.unwrap().snapshot;
+
+        let position = next_state.positions.get("AAPL").unwrap();
+        assert_eq!(position.quantity, dec!(10));
+        assert_eq!(position.average_cost, dec!(100.25));
+        assert_eq!(position.total_cost_basis, dec!(1002.50));
+        assert_eq!(position.lots[0].acquisition_price, dec!(99.76));
+        assert_eq!(
+            next_state.cash_balances.get(account_currency),
+            Some(&dec!(-1002.50))
+        );
+        assert_eq!(next_state.cost_basis, dec!(1002.50));
+    }
+
+    #[test]
+    fn test_trade_amount_policy_transfer_in_keeps_existing_amount_behavior() {
+        let mock_fx_service = Arc::new(MockFxService::new());
+        let account_currency = "USD";
+        let base_currency = Arc::new(RwLock::new(account_currency.to_string()));
+        let calculator = create_calculator(mock_fx_service, base_currency);
+
+        let target_date_str = "2025-03-10";
+        let target_date = NaiveDate::from_str(target_date_str).unwrap();
+        let previous_snapshot = create_initial_snapshot("acc_1", account_currency, "2025-03-09");
+
+        let mut transfer_in = create_default_activity(
+            "act_transfer_in_with_amount",
+            ActivityType::TransferIn,
+            "AAPL",
+            dec!(10),
+            dec!(99.76),
+            dec!(4.90),
+            account_currency,
+            target_date_str,
+        );
+        transfer_in.amount = Some(dec!(9976));
+
+        let result =
+            calculator.calculate_next_holdings(&previous_snapshot, &[transfer_in], target_date);
+        assert!(result.is_ok(), "Calculation failed: {:?}", result.err());
+        let next_state = result.unwrap().snapshot;
+
+        let position = next_state.positions.get("AAPL").unwrap();
+        assert_eq!(position.quantity, dec!(10));
+        assert_eq!(position.average_cost, dec!(998.09));
+        assert_eq!(position.total_cost_basis, dec!(9980.90));
+        assert_eq!(position.lots[0].acquisition_price, dec!(997.60));
+        assert_eq!(
+            next_state.cash_balances.get(account_currency),
+            Some(&dec!(-4.90))
+        );
+        assert_eq!(next_state.net_contribution, dec!(9980.90));
     }
 
     #[test]

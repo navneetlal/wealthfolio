@@ -254,6 +254,39 @@ pub fn is_broker_crypto(code: Option<&str>) -> bool {
     )
 }
 
+fn is_broker_bond(code: Option<&str>) -> bool {
+    matches!(
+        code.map(|c| c.to_uppercase()).as_deref(),
+        Some("BOND" | "FIXEDINCOME" | "FIXED_INCOME" | "FIXED INCOME" | "DEBT")
+    )
+}
+
+fn normalized_trade_amount(
+    activity_type: &str,
+    quantity: Option<Decimal>,
+    unit_price: Option<Decimal>,
+    amount: Option<Decimal>,
+    is_option_activity: bool,
+    is_crypto: bool,
+    is_bond: bool,
+) -> Option<Decimal> {
+    if matches!(
+        activity_type,
+        activities::ACTIVITY_TYPE_BUY | activities::ACTIVITY_TYPE_SELL
+    ) && !is_option_activity
+        && !is_crypto
+        && !is_bond
+    {
+        if let (Some(quantity), Some(unit_price)) = (quantity, unit_price) {
+            if !quantity.is_zero() && !unit_price.is_zero() {
+                return Some(quantity * unit_price);
+            }
+        }
+    }
+
+    amount
+}
+
 /// Maps a broker API activity into a `NewActivity` with unresolved `AssetResolutionInput`.
 ///
 /// The returned `NewActivity` has `AssetResolutionInput { symbol, exchange_mic, kind }` set
@@ -321,6 +354,7 @@ pub fn map_broker_activity(
     let symbol_type_ref = symbol_ref.and_then(|s| s.symbol_type.as_ref());
     let symbol_type_code = symbol_type_ref.and_then(|t| t.code.as_deref());
     let is_crypto = is_broker_crypto(symbol_type_code);
+    let is_bond = is_broker_bond(symbol_type_code);
 
     // Extract exchange MIC from broker data (prefer mic_code over code)
     let exchange_mic_from_symbol = symbol_ref.and_then(|s| s.exchange.as_ref()).and_then(|e| {
@@ -411,6 +445,8 @@ pub fn map_broker_activity(
                 Some("OPTION".to_string())
             } else if is_crypto {
                 Some("CRYPTO".to_string())
+            } else if is_bond {
+                Some("BOND".to_string())
             } else {
                 None
             };
@@ -437,6 +473,8 @@ pub fn map_broker_activity(
                     Some("OPTION".to_string())
                 } else if is_crypto {
                     Some("CRYPTO".to_string())
+                } else if is_bond {
+                    Some("BOND".to_string())
                 } else {
                     None
                 },
@@ -455,6 +493,15 @@ pub fn map_broker_activity(
     let unit_price = activity.price.and_then(Decimal::from_f64).map(|d| d.abs());
     let fee = activity.fee.and_then(Decimal::from_f64).map(|d| d.abs());
     let amount = activity.amount.and_then(Decimal::from_f64).map(|d| d.abs());
+    let amount = normalized_trade_amount(
+        &activity_type,
+        quantity,
+        unit_price,
+        amount,
+        is_option_activity,
+        is_crypto,
+        is_bond,
+    );
     let fx_rate = activity.fx_rate.and_then(Decimal::from_f64);
 
     // Normalize minor currency units (e.g., GBp -> GBP) and convert amounts
@@ -520,9 +567,31 @@ pub fn map_broker_activity(
 mod tests {
     use super::*;
     use crate::broker::models::{
-        AccountUniversalActivityExchange, AccountUniversalActivityOptionSymbol,
-        AccountUniversalActivityUnderlyingSymbol, MappingMetadata,
+        AccountUniversalActivityCurrency, AccountUniversalActivityExchange,
+        AccountUniversalActivityOptionSymbol, AccountUniversalActivitySymbol,
+        AccountUniversalActivitySymbolType, AccountUniversalActivityUnderlyingSymbol,
+        MappingMetadata,
     };
+
+    fn decimal(value: &str) -> Decimal {
+        Decimal::from_str_exact(value).unwrap()
+    }
+
+    fn broker_symbol(symbol: &str, symbol_type_code: &str) -> AccountUniversalActivitySymbol {
+        AccountUniversalActivitySymbol {
+            symbol: Some(symbol.to_string()),
+            raw_symbol: Some(symbol.to_string()),
+            symbol_type: Some(AccountUniversalActivitySymbolType {
+                code: Some(symbol_type_code.to_string()),
+                ..Default::default()
+            }),
+            currency: Some(AccountUniversalActivityCurrency {
+                code: Some("USD".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
 
     #[test]
     fn test_needs_review_unknown_type() {
@@ -589,6 +658,79 @@ mod tests {
         let metadata: serde_json::Value = serde_json::from_str(&metadata_json).unwrap();
         assert_eq!(metadata["provider_type"], "snaptrade");
         assert_eq!(metadata["external_reference_id"], "ext-123");
+    }
+
+    #[test]
+    fn test_map_broker_activity_trade_amount_policy_recomputes_plain_trade_amount() {
+        let activity = AccountUniversalActivity {
+            id: Some("act-equity-buy".to_string()),
+            activity_type: Some("BUY".to_string()),
+            symbol: Some(broker_symbol("AMD", "cs")),
+            units: Some(10.0),
+            price: Some(99.76),
+            amount: Some(9976.0),
+            fee: Some(4.9),
+            ..Default::default()
+        };
+
+        let mapped = map_broker_activity(&activity, "acct-1", Some("USD"), Some("USD")).unwrap();
+
+        assert_eq!(mapped.amount.unwrap().round_dp(4), decimal("997.6000"));
+        assert_eq!(mapped.fee.unwrap().round_dp(4), decimal("4.9000"));
+    }
+
+    #[test]
+    fn test_map_broker_activity_trade_amount_policy_preserves_bond_amount() {
+        let activity = AccountUniversalActivity {
+            id: Some("act-bond-buy".to_string()),
+            activity_type: Some("BUY".to_string()),
+            symbol: Some(broker_symbol("US912828ZT58", "bond")),
+            units: Some(1000.0),
+            price: Some(99.0),
+            amount: Some(990.0),
+            ..Default::default()
+        };
+
+        let mapped = map_broker_activity(&activity, "acct-1", Some("USD"), Some("USD")).unwrap();
+
+        assert_eq!(mapped.amount.unwrap().round_dp(2), decimal("990.00"));
+        let asset = mapped.asset.expect("bond activity should produce an asset");
+        assert_eq!(asset.kind.as_deref(), Some("BOND"));
+        assert_eq!(asset.instrument_type.as_deref(), Some("BOND"));
+    }
+
+    #[test]
+    fn test_map_broker_activity_trade_amount_policy_preserves_option_amount() {
+        let activity = AccountUniversalActivity {
+            id: Some("act-option-buy".to_string()),
+            activity_type: Some("BUY".to_string()),
+            option_symbol: Some(AccountUniversalActivityOptionSymbol {
+                ticker: Some("AAPL  260116C00200000".to_string()),
+                ..Default::default()
+            }),
+            units: Some(2.0),
+            price: Some(3.0),
+            amount: Some(600.0),
+            ..Default::default()
+        };
+
+        let mapped = map_broker_activity(&activity, "acct-1", Some("USD"), Some("USD")).unwrap();
+
+        assert_eq!(mapped.amount.unwrap().round_dp(2), decimal("600.00"));
+    }
+
+    #[test]
+    fn test_map_broker_activity_trade_amount_policy_preserves_cash_amount() {
+        let activity = AccountUniversalActivity {
+            id: Some("act-cash".to_string()),
+            activity_type: Some("DEPOSIT".to_string()),
+            amount: Some(12.34),
+            ..Default::default()
+        };
+
+        let mapped = map_broker_activity(&activity, "acct-1", Some("USD"), Some("USD")).unwrap();
+
+        assert_eq!(mapped.amount.unwrap().round_dp(2), decimal("12.34"));
     }
 
     #[test]

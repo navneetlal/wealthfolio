@@ -1,13 +1,17 @@
+use crate::activities::{
+    Activity, ActivityRepositoryTrait, ACTIVITY_TYPE_DIVIDEND, ACTIVITY_TYPE_INTEREST,
+};
 use crate::assets::{
     Asset, AssetClassificationService, AssetKind, AssetServiceTrait, InstrumentType,
 };
 use crate::constants::DECIMAL_PRECISION;
 use crate::errors::{CalculatorError, Error as CoreError, Result};
 use crate::fx::currency::{get_normalization_rule, normalize_currency_code};
+use crate::fx::FxServiceTrait;
 use crate::lots::LotRepositoryTrait;
 use crate::portfolio::holdings::holdings_model::{Holding, HoldingType, Instrument, MonetaryValue};
 use crate::portfolio::snapshot::{self, SnapshotServiceTrait};
-use crate::utils::time_utils::{parse_user_timezone_or_default, user_today};
+use crate::utils::time_utils::{activity_date_in_tz, parse_user_timezone_or_default, user_today};
 use async_trait::async_trait;
 use chrono::NaiveDate;
 use log::{debug, error, warn};
@@ -58,6 +62,57 @@ pub struct HoldingsService {
     classification_service: Arc<AssetClassificationService>,
     timezone: Arc<RwLock<String>>,
     lot_repository: Option<Arc<dyn LotRepositoryTrait>>,
+    income_service: Option<Arc<dyn HoldingIncomeServiceTrait>>,
+}
+
+pub trait HoldingIncomeServiceTrait: Send + Sync {
+    fn get_asset_income(
+        &self,
+        account_ids: &[String],
+        asset_currencies: &HashMap<String, String>,
+        base_currency: &str,
+    ) -> Result<HashMap<String, MonetaryValue>>;
+}
+
+pub struct HoldingIncomeService {
+    activity_repository: Arc<dyn ActivityRepositoryTrait>,
+    fx_service: Arc<dyn FxServiceTrait>,
+    timezone: Arc<RwLock<String>>,
+}
+
+impl HoldingIncomeService {
+    pub fn new(
+        activity_repository: Arc<dyn ActivityRepositoryTrait>,
+        fx_service: Arc<dyn FxServiceTrait>,
+        timezone: Arc<RwLock<String>>,
+    ) -> Self {
+        Self {
+            activity_repository,
+            fx_service,
+            timezone,
+        }
+    }
+}
+
+impl HoldingIncomeServiceTrait for HoldingIncomeService {
+    fn get_asset_income(
+        &self,
+        account_ids: &[String],
+        asset_currencies: &HashMap<String, String>,
+        base_currency: &str,
+    ) -> Result<HashMap<String, MonetaryValue>> {
+        let activities = self
+            .activity_repository
+            .get_activities_by_account_ids(account_ids)?;
+        let timezone = parse_user_timezone_or_default(&self.timezone.read().unwrap());
+        Ok(calculate_asset_income(
+            &activities,
+            asset_currencies,
+            base_currency,
+            self.fx_service.as_ref(),
+            timezone,
+        ))
+    }
 }
 
 struct AssetInfo {
@@ -136,12 +191,34 @@ impl HoldingsService {
             classification_service,
             timezone,
             lot_repository: None,
+            income_service: None,
         }
     }
 
     pub fn with_lot_repository(mut self, lot_repository: Arc<dyn LotRepositoryTrait>) -> Self {
         self.lot_repository = Some(lot_repository);
         self
+    }
+
+    pub fn with_income_service(
+        mut self,
+        income_service: Arc<dyn HoldingIncomeServiceTrait>,
+    ) -> Self {
+        self.income_service = Some(income_service);
+        self
+    }
+
+    pub fn with_income_dependencies(
+        self,
+        activity_repository: Arc<dyn ActivityRepositoryTrait>,
+        fx_service: Arc<dyn FxServiceTrait>,
+    ) -> Self {
+        let timezone = self.timezone.clone();
+        self.with_income_service(Arc::new(HoldingIncomeService::new(
+            activity_repository,
+            fx_service,
+            timezone,
+        )))
     }
 
     fn today_in_user_timezone(&self) -> chrono::NaiveDate {
@@ -282,6 +359,10 @@ impl HoldingsService {
                 realized_gain_pct: None,
                 total_gain: None,
                 total_gain_pct: None,
+                income: None,
+                total_return: None,
+                total_return_pct: None,
+                return_basis: None,
                 day_change: None,
                 day_change_pct: None,
                 prev_close_value: None,
@@ -339,6 +420,13 @@ impl HoldingsService {
                 realized_gain_pct: Some(Decimal::ZERO),
                 total_gain: Some(MonetaryValue::zero()),
                 total_gain_pct: Some(Decimal::ZERO),
+                income: Some(MonetaryValue::zero()),
+                total_return: Some(MonetaryValue::zero()),
+                total_return_pct: Some(Decimal::ZERO),
+                return_basis: Some(MonetaryValue {
+                    local: amount,
+                    base: Decimal::ZERO,
+                }),
                 day_change: Some(MonetaryValue::zero()),
                 day_change_pct: Some(Decimal::ZERO),
                 prev_close_value: Some(MonetaryValue {
@@ -354,6 +442,124 @@ impl HoldingsService {
         }
 
         holdings
+    }
+
+    async fn apply_historical_cost_basis_best_effort(
+        &self,
+        account_id: &str,
+        base_currency: &str,
+        holdings: &mut [Holding],
+        asset_id_filter: Option<&str>,
+    ) {
+        if holdings.is_empty() {
+            return;
+        }
+
+        let Some(lot_repository) = &self.lot_repository else {
+            return;
+        };
+
+        let security_asset_ids: HashSet<String> = holdings
+            .iter()
+            .filter(|holding| holding.holding_type == HoldingType::Security)
+            .filter_map(|holding| holding.instrument.as_ref().map(|instrument| &instrument.id))
+            .filter(|asset_id| asset_id_filter.is_none_or(|filter| asset_id.as_str() == filter))
+            .cloned()
+            .collect();
+
+        if security_asset_ids.is_empty() {
+            return;
+        }
+
+        let open_lots_result = if let Some(asset_id) = asset_id_filter {
+            lot_repository
+                .get_open_lots_for_account_asset(account_id, asset_id)
+                .await
+        } else {
+            lot_repository.get_open_lots_for_account(account_id).await
+        };
+
+        let open_lots = match open_lots_result {
+            Ok(lots) => lots,
+            Err(e) => {
+                warn!(
+                    "Failed to load open lots for account {} while applying historical cost basis: {}",
+                    account_id, e
+                );
+                return;
+            }
+        };
+        if open_lots.is_empty() {
+            return;
+        }
+
+        let requested_base_currency = normalize_currency_code(base_currency);
+        let mut cost_basis_base_by_asset: HashMap<String, Decimal> = HashMap::new();
+        let mut mismatched_base_assets: HashSet<String> = HashSet::new();
+        let mut invalid_base_cost_assets: HashSet<String> = HashSet::new();
+
+        for lot in open_lots {
+            if !security_asset_ids.contains(&lot.asset_id) {
+                continue;
+            }
+
+            let lot_base_currency = normalize_currency_code(&lot.base_currency);
+            if lot_base_currency != requested_base_currency {
+                mismatched_base_assets.insert(lot.asset_id.clone());
+                continue;
+            }
+
+            let remaining_cost_basis_base = match lot.remaining_cost_basis_base.parse::<Decimal>() {
+                Ok(value) => value,
+                Err(e) => {
+                    invalid_base_cost_assets.insert(lot.asset_id.clone());
+                    warn!(
+                            "Skipping historical cost basis seeding for asset {} in account {} because an open lot has invalid base cost basis: {}",
+                            lot.asset_id, account_id, e
+                        );
+                    continue;
+                }
+            };
+            cost_basis_base_by_asset
+                .entry(lot.asset_id)
+                .and_modify(|total| *total += remaining_cost_basis_base)
+                .or_insert(remaining_cost_basis_base);
+        }
+
+        for asset_id in invalid_base_cost_assets {
+            cost_basis_base_by_asset.remove(&asset_id);
+        }
+
+        for asset_id in mismatched_base_assets {
+            cost_basis_base_by_asset.remove(&asset_id);
+            warn!(
+                "Skipping historical cost basis seeding for asset {} in account {} because lot base currency does not match requested base currency {}.",
+                asset_id, account_id, base_currency
+            );
+        }
+
+        if cost_basis_base_by_asset.is_empty() {
+            return;
+        }
+
+        for holding in holdings {
+            if holding.holding_type != HoldingType::Security {
+                continue;
+            }
+
+            let Some(asset_id) = holding.instrument.as_ref().map(|instrument| &instrument.id)
+            else {
+                continue;
+            };
+            let Some(cost_basis_base) = cost_basis_base_by_asset.get(asset_id) else {
+                continue;
+            };
+            let Some(cost_basis) = &mut holding.cost_basis else {
+                continue;
+            };
+
+            cost_basis.base = *cost_basis_base;
+        }
     }
 
     async fn value_holdings_best_effort(&self, account_id: &str, holdings: &mut [Holding]) {
@@ -402,6 +608,7 @@ impl HoldingsService {
         struct Totals {
             realized_local: Decimal,
             realized_base: Decimal,
+            disposed_cost_local: Decimal,
             disposed_cost_base: Decimal,
         }
 
@@ -410,6 +617,7 @@ impl HoldingsService {
             let totals = totals_by_asset.entry(disposal.asset_id).or_default();
             totals.realized_local += parse_decimal_lossy(&disposal.realized_pnl);
             totals.realized_base += parse_decimal_lossy(&disposal.realized_pnl_base);
+            totals.disposed_cost_local += parse_decimal_lossy(&disposal.cost_basis);
             totals.disposed_cost_base += parse_decimal_lossy(&disposal.cost_basis_base);
         }
 
@@ -456,14 +664,247 @@ impl HoldingsService {
                 .as_ref()
                 .map(|cost_basis| cost_basis.base)
                 .unwrap_or(Decimal::ZERO);
-            let total_cost_base = open_cost_base + totals.disposed_cost_base;
-            holding.total_gain_pct = if total_cost_base > Decimal::ZERO {
-                Some((total_gain.base / total_cost_base).round_dp(DECIMAL_PRECISION))
-            } else if !total_gain.base.is_zero() {
-                Some(dec!(1.0))
-            } else {
-                Some(Decimal::ZERO)
+            let open_cost_local = holding
+                .cost_basis
+                .as_ref()
+                .map(|cost_basis| cost_basis.local)
+                .unwrap_or(Decimal::ZERO);
+            let return_basis = MonetaryValue {
+                local: open_cost_local + totals.disposed_cost_local,
+                base: open_cost_base + totals.disposed_cost_base,
             };
+            holding.return_basis = Some(return_basis.clone());
+            holding.total_gain_pct = gain_pct(total_gain.base, return_basis.base);
+        }
+    }
+
+    fn apply_return_basis_defaults(&self, holdings: &mut [Holding]) {
+        for holding in holdings {
+            if holding.return_basis.is_none() {
+                holding.return_basis = holding.cost_basis.clone();
+            }
+
+            let Some(total_gain) = holding.total_gain.clone() else {
+                continue;
+            };
+            let basis_base = holding
+                .return_basis
+                .as_ref()
+                .map(|basis| basis.base)
+                .unwrap_or(Decimal::ZERO);
+            holding.total_gain_pct = gain_pct(total_gain.base, basis_base);
+        }
+    }
+
+    fn apply_income_and_total_return_best_effort(
+        &self,
+        account_ids: &[String],
+        base_currency: &str,
+        holdings: &mut [Holding],
+    ) {
+        let mut asset_currencies: HashMap<String, String> = HashMap::new();
+        for holding in holdings.iter() {
+            if matches!(
+                holding.holding_type,
+                HoldingType::Security | HoldingType::AlternativeAsset
+            ) {
+                if let Some(instrument) = &holding.instrument {
+                    asset_currencies.insert(instrument.id.clone(), holding.local_currency.clone());
+                }
+            }
+        }
+
+        let income_by_asset = if asset_currencies.is_empty() {
+            HashMap::new()
+        } else {
+            match &self.income_service {
+                Some(income_service) => {
+                    match income_service.get_asset_income(
+                        account_ids,
+                        &asset_currencies,
+                        base_currency,
+                    ) {
+                        Ok(income) => income,
+                        Err(e) => {
+                            warn!(
+                                "Failed to load asset-linked income for holdings scope {:?}: {}",
+                                account_ids, e
+                            );
+                            HashMap::new()
+                        }
+                    }
+                }
+                None => HashMap::new(),
+            }
+        };
+
+        for holding in holdings {
+            if !matches!(
+                holding.holding_type,
+                HoldingType::Security | HoldingType::AlternativeAsset
+            ) {
+                holding.income = holding
+                    .income
+                    .clone()
+                    .or_else(|| Some(MonetaryValue::zero()));
+                refresh_total_return(holding);
+                continue;
+            }
+
+            let income = holding
+                .instrument
+                .as_ref()
+                .and_then(|instrument| income_by_asset.get(&instrument.id))
+                .cloned()
+                .unwrap_or_else(MonetaryValue::zero);
+            holding.income = Some(income);
+            refresh_total_return(holding);
+        }
+    }
+}
+
+fn gain_pct(amount_base: Decimal, basis_base: Decimal) -> Option<Decimal> {
+    if basis_base > Decimal::ZERO {
+        Some((amount_base / basis_base).round_dp(DECIMAL_PRECISION))
+    } else if !amount_base.is_zero() {
+        Some(dec!(1.0))
+    } else {
+        Some(Decimal::ZERO)
+    }
+}
+
+fn refresh_total_return(holding: &mut Holding) {
+    if holding.total_gain.is_none() {
+        let mut total_gain = MonetaryValue::zero();
+        let mut has_gain = false;
+        if let Some(realized) = &holding.realized_gain {
+            add_monetary(&mut total_gain, realized);
+            has_gain = true;
+        }
+        if let Some(unrealized) = &holding.unrealized_gain {
+            add_monetary(&mut total_gain, unrealized);
+            has_gain = true;
+        }
+        if has_gain {
+            holding.total_gain = Some(total_gain);
+        }
+    }
+
+    let basis_base = holding
+        .return_basis
+        .as_ref()
+        .map(|basis| basis.base)
+        .unwrap_or(Decimal::ZERO);
+    if let Some(total_gain) = &holding.total_gain {
+        holding.total_gain_pct = gain_pct(total_gain.base, basis_base);
+    }
+
+    let mut total_return = holding
+        .total_gain
+        .clone()
+        .unwrap_or_else(MonetaryValue::zero);
+    if let Some(income) = &holding.income {
+        add_monetary(&mut total_return, income);
+    }
+    holding.total_return = Some(total_return.clone());
+    holding.total_return_pct = gain_pct(total_return.base, basis_base);
+}
+
+fn calculate_asset_income(
+    activities: &[Activity],
+    asset_currencies: &HashMap<String, String>,
+    base_currency: &str,
+    fx_service: &dyn FxServiceTrait,
+    timezone: chrono_tz::Tz,
+) -> HashMap<String, MonetaryValue> {
+    let mut income_by_asset: HashMap<String, MonetaryValue> = HashMap::new();
+
+    for activity in activities {
+        if !activity.is_posted() {
+            continue;
+        }
+
+        let activity_type = activity.effective_type();
+        if activity_type != ACTIVITY_TYPE_DIVIDEND && activity_type != ACTIVITY_TYPE_INTEREST {
+            continue;
+        }
+
+        let Some(asset_id) = activity.asset_id.as_ref() else {
+            continue;
+        };
+        let Some(local_currency) = asset_currencies.get(asset_id) else {
+            continue;
+        };
+
+        let amount = activity_income_amount(activity);
+        if amount.is_zero() {
+            continue;
+        }
+
+        let activity_date = activity_date_in_tz(activity.activity_date, timezone);
+        let Some(local_income) = convert_income_amount(
+            fx_service,
+            amount,
+            &activity.currency,
+            local_currency,
+            activity_date,
+            &activity.id,
+        ) else {
+            continue;
+        };
+        let Some(base_income) = convert_income_amount(
+            fx_service,
+            amount,
+            &activity.currency,
+            base_currency,
+            activity_date,
+            &activity.id,
+        ) else {
+            continue;
+        };
+
+        let income = MonetaryValue {
+            local: local_income,
+            base: base_income,
+        };
+        income_by_asset
+            .entry(asset_id.clone())
+            .and_modify(|existing| add_monetary(existing, &income))
+            .or_insert(income);
+    }
+
+    income_by_asset
+}
+
+fn activity_income_amount(activity: &Activity) -> Decimal {
+    let amount = activity.amt();
+    if amount > Decimal::ZERO {
+        amount
+    } else {
+        activity.qty() * activity.price()
+    }
+}
+
+fn convert_income_amount(
+    fx_service: &dyn FxServiceTrait,
+    amount: Decimal,
+    from_currency: &str,
+    to_currency: &str,
+    date: NaiveDate,
+    activity_id: &str,
+) -> Option<Decimal> {
+    if from_currency == to_currency {
+        return Some(amount);
+    }
+
+    match fx_service.convert_currency_for_date(amount, from_currency, to_currency, date) {
+        Ok(converted) => Some(converted),
+        Err(e) => {
+            warn!(
+                "Skipping income conversion for activity {}: {} {} -> {} on {} failed: {}",
+                activity_id, amount, from_currency, to_currency, date, e
+            );
+            None
         }
     }
 }
@@ -528,6 +969,9 @@ fn normalize_holding_currency(holding: &mut Holding) {
         apply_factor_to_optional_monetary_value(&mut holding.unrealized_gain, factor);
         apply_factor_to_optional_monetary_value(&mut holding.realized_gain, factor);
         apply_factor_to_optional_monetary_value(&mut holding.total_gain, factor);
+        apply_factor_to_optional_monetary_value(&mut holding.income, factor);
+        apply_factor_to_optional_monetary_value(&mut holding.total_return, factor);
+        apply_factor_to_optional_monetary_value(&mut holding.return_basis, factor);
         apply_factor_to_optional_monetary_value(&mut holding.day_change, factor);
         apply_factor_to_optional_monetary_value(&mut holding.prev_close_value, factor);
 
@@ -718,10 +1162,23 @@ impl HoldingsServiceTrait for HoldingsService {
                 true,
             )
             .await;
+        self.apply_historical_cost_basis_best_effort(
+            account_id,
+            base_currency,
+            &mut holdings,
+            None,
+        )
+        .await;
         self.value_holdings_best_effort(account_id, &mut holdings)
             .await;
         self.apply_realized_gains_best_effort(account_id, &mut holdings)
             .await;
+        self.apply_return_basis_defaults(&mut holdings);
+        self.apply_income_and_total_return_best_effort(
+            &[account_id.to_string()],
+            base_currency,
+            &mut holdings,
+        );
         apply_portfolio_weights(account_id, &mut holdings);
 
         // Load taxonomy classifications for all holdings
@@ -790,6 +1247,9 @@ impl HoldingsServiceTrait for HoldingsService {
                     add_optional_monetary(&mut acc.unrealized_gain, &holding.unrealized_gain);
                     add_optional_monetary(&mut acc.realized_gain, &holding.realized_gain);
                     add_optional_monetary(&mut acc.total_gain, &holding.total_gain);
+                    add_optional_monetary(&mut acc.income, &holding.income);
+                    add_optional_monetary(&mut acc.total_return, &holding.total_return);
+                    add_optional_monetary(&mut acc.return_basis, &holding.return_basis);
                     add_optional_monetary(&mut acc.day_change, &holding.day_change);
                     add_optional_monetary(&mut acc.prev_close_value, &holding.prev_close_value);
                     if let Some(date) = holding.open_date {
@@ -827,18 +1287,29 @@ impl HoldingsServiceTrait for HoldingsService {
         // The merge loop accumulates monetary values but percentages from the first
         // account seen are no longer correct for the aggregated position.
         for h in result.iter_mut() {
-            let cost_base = h
+            let basis_base = h
+                .return_basis
+                .as_ref()
+                .map(|basis| basis.base)
+                .unwrap_or(Decimal::ZERO);
+            let open_cost_base = h
                 .cost_basis
                 .as_ref()
-                .map(|c| c.base)
+                .map(|cost_basis| cost_basis.base)
                 .unwrap_or(Decimal::ZERO);
-            if cost_base > Decimal::ZERO {
-                h.unrealized_gain_pct = h.unrealized_gain.as_ref().map(|v| v.base / cost_base);
-                h.total_gain_pct = h.total_gain.as_ref().map(|v| v.base / cost_base);
+            if open_cost_base > Decimal::ZERO {
+                h.unrealized_gain_pct = h
+                    .unrealized_gain
+                    .as_ref()
+                    .map(|v| (v.base / open_cost_base).round_dp(DECIMAL_PRECISION));
             } else {
                 h.unrealized_gain_pct = None;
-                h.total_gain_pct = None;
             }
+            h.total_gain_pct = h
+                .total_gain
+                .as_ref()
+                .and_then(|v| gain_pct(v.base, basis_base));
+            refresh_total_return(h);
             let prev_close_base = h
                 .prev_close_value
                 .as_ref()
@@ -912,10 +1383,23 @@ impl HoldingsServiceTrait for HoldingsService {
                 true,
             )
             .await;
+        self.apply_historical_cost_basis_best_effort(
+            account_id,
+            base_currency,
+            &mut holdings,
+            Some(asset_id),
+        )
+        .await;
         self.value_holdings_best_effort(account_id, &mut holdings)
             .await;
         self.apply_realized_gains_best_effort(account_id, &mut holdings)
             .await;
+        self.apply_return_basis_defaults(&mut holdings);
+        self.apply_income_and_total_return_best_effort(
+            &[account_id.to_string()],
+            base_currency,
+            &mut holdings,
+        );
         apply_portfolio_weights(account_id, &mut holdings);
         for holding in &mut holdings {
             normalize_holding_currency(holding);
@@ -1053,6 +1537,10 @@ impl HoldingsServiceTrait for HoldingsService {
                 realized_gain_pct: None,
                 total_gain: None,
                 total_gain_pct: None,
+                income: None,
+                total_return: None,
+                total_return_pct: None,
+                return_basis: None,
                 day_change: None,
                 day_change_pct: None,
                 prev_close_value: None,
@@ -1099,6 +1587,10 @@ impl HoldingsServiceTrait for HoldingsService {
                 realized_gain_pct: None,
                 total_gain: None,
                 total_gain_pct: None,
+                income: None,
+                total_return: None,
+                total_return_pct: None,
+                return_basis: None,
                 day_change: None,
                 day_change_pct: None,
                 prev_close_value: None,
@@ -1116,11 +1608,14 @@ impl HoldingsServiceTrait for HoldingsService {
 
 #[cfg(test)]
 mod tests {
+    use crate::activities::ActivityStatus;
     use crate::assets::{
         AssetMetadata, AssetResolutionInput, AssetResolutionOutput, AssetSpec, EnsureAssetsResult,
         NewAsset, QuoteMode, UpdateAssetProfile,
     };
     use crate::errors::Error;
+    use crate::fx::{denormalization_multiplier, ExchangeRate, FxServiceTrait, NewExchangeRate};
+    use crate::lots::{AssetLotView, LotClosure, LotRecord};
     use crate::portfolio::snapshot::{AccountStateSnapshot, Position, SnapshotRecalcMode};
     use crate::snapshot::Lot;
     use crate::taxonomies::{
@@ -1135,7 +1630,10 @@ mod tests {
     use rust_decimal_macros::dec;
     use serde_json::json;
     use std::collections::{HashMap, VecDeque};
-    use std::sync::Arc;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    };
 
     struct MockAssetService {
         assets: HashMap<String, Asset>,
@@ -1322,10 +1820,325 @@ mod tests {
                             local: *value,
                             base: *value,
                         };
+                        if let Some(cost_basis) = &holding.cost_basis {
+                            let unrealized = MonetaryValue {
+                                local: *value - cost_basis.local,
+                                base: *value - cost_basis.base,
+                            };
+                            holding.unrealized_gain = Some(unrealized.clone());
+                            holding.unrealized_gain_pct =
+                                gain_pct(unrealized.base, cost_basis.base);
+                            holding.total_gain = Some(unrealized.clone());
+                            holding.total_gain_pct = holding.unrealized_gain_pct;
+                        }
                     }
                 }
             }
             Ok(())
+        }
+    }
+
+    struct MockFxService {
+        rates: HashMap<(String, String, NaiveDate), Decimal>,
+    }
+
+    impl MockFxService {
+        fn new(rates: Vec<(&str, &str, NaiveDate, Decimal)>) -> Self {
+            Self {
+                rates: rates
+                    .into_iter()
+                    .map(|(from, to, date, rate)| {
+                        (
+                            (
+                                normalize_currency_code(from).to_string(),
+                                normalize_currency_code(to).to_string(),
+                                date,
+                            ),
+                            rate,
+                        )
+                    })
+                    .collect(),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl FxServiceTrait for MockFxService {
+        fn initialize(&self) -> Result<()> {
+            Ok(())
+        }
+
+        fn get_historical_rates(
+            &self,
+            _from_currency: &str,
+            _to_currency: &str,
+            _days: i64,
+        ) -> Result<Vec<ExchangeRate>> {
+            Ok(Vec::new())
+        }
+
+        fn get_latest_exchange_rate(
+            &self,
+            from_currency: &str,
+            to_currency: &str,
+        ) -> Result<Decimal> {
+            self.get_exchange_rate_for_date(from_currency, to_currency, valuation_date_today())
+        }
+
+        fn get_exchange_rate_for_date(
+            &self,
+            from_currency: &str,
+            to_currency: &str,
+            date: NaiveDate,
+        ) -> Result<Decimal> {
+            let from = normalize_currency_code(from_currency).to_string();
+            let to = normalize_currency_code(to_currency).to_string();
+            let source_multiplier = if from == from_currency {
+                Decimal::ONE
+            } else {
+                Decimal::ONE / denormalization_multiplier(from_currency)
+            };
+            let target_multiplier = denormalization_multiplier(to_currency);
+            if from == to {
+                return Ok(source_multiplier * target_multiplier);
+            }
+            self.rates
+                .get(&(from.clone(), to.clone(), date))
+                .map(|rate| source_multiplier * *rate * target_multiplier)
+                .ok_or_else(|| {
+                    Error::Calculation(CalculatorError::Calculation(format!(
+                        "Missing FX rate {from}->{to} on {date}"
+                    )))
+                })
+        }
+
+        fn convert_currency(
+            &self,
+            amount: Decimal,
+            from_currency: &str,
+            to_currency: &str,
+        ) -> Result<Decimal> {
+            Ok(amount * self.get_latest_exchange_rate(from_currency, to_currency)?)
+        }
+
+        fn convert_currency_for_date(
+            &self,
+            amount: Decimal,
+            from_currency: &str,
+            to_currency: &str,
+            date: NaiveDate,
+        ) -> Result<Decimal> {
+            Ok(amount * self.get_exchange_rate_for_date(from_currency, to_currency, date)?)
+        }
+
+        fn get_latest_exchange_rates(&self) -> Result<Vec<ExchangeRate>> {
+            Ok(Vec::new())
+        }
+
+        async fn add_exchange_rate(&self, _new_rate: NewExchangeRate) -> Result<ExchangeRate> {
+            unimplemented!("unused in holdings service tests")
+        }
+
+        async fn update_exchange_rate(
+            &self,
+            _from_currency: &str,
+            _to_currency: &str,
+            _rate: Decimal,
+        ) -> Result<ExchangeRate> {
+            unimplemented!("unused in holdings service tests")
+        }
+
+        async fn delete_exchange_rate(&self, _rate_id: &str) -> Result<()> {
+            unimplemented!("unused in holdings service tests")
+        }
+
+        async fn register_currency_pair(
+            &self,
+            _from_currency: &str,
+            _to_currency: &str,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        async fn register_currency_pair_manual(
+            &self,
+            _from_currency: &str,
+            _to_currency: &str,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        async fn ensure_fx_pairs(&self, _pairs: Vec<(String, String)>) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    struct MockHoldingIncomeService {
+        income_by_account: HashMap<String, HashMap<String, MonetaryValue>>,
+        scopes: Arc<Mutex<Vec<Vec<String>>>>,
+    }
+
+    impl MockHoldingIncomeService {
+        fn new(income_by_account: HashMap<String, HashMap<String, MonetaryValue>>) -> Self {
+            Self {
+                income_by_account,
+                scopes: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn scopes(&self) -> Arc<Mutex<Vec<Vec<String>>>> {
+            self.scopes.clone()
+        }
+    }
+
+    impl HoldingIncomeServiceTrait for MockHoldingIncomeService {
+        fn get_asset_income(
+            &self,
+            account_ids: &[String],
+            _asset_currencies: &HashMap<String, String>,
+            _base_currency: &str,
+        ) -> Result<HashMap<String, MonetaryValue>> {
+            self.scopes.lock().unwrap().push(account_ids.to_vec());
+            let mut result = HashMap::new();
+            for account_id in account_ids {
+                if let Some(income_by_asset) = self.income_by_account.get(account_id) {
+                    for (asset_id, income) in income_by_asset {
+                        result
+                            .entry(asset_id.clone())
+                            .and_modify(|existing| add_monetary(existing, income))
+                            .or_insert_with(|| income.clone());
+                    }
+                }
+            }
+            Ok(result)
+        }
+    }
+
+    struct MockLotRepository {
+        open_lots: Vec<LotRecord>,
+        disposals: Vec<crate::lots::LotDisposal>,
+        open_lots_calls: Arc<AtomicUsize>,
+        open_lots_for_asset_calls: Arc<AtomicUsize>,
+    }
+
+    impl MockLotRepository {
+        fn new(open_lots: Vec<LotRecord>) -> Self {
+            Self {
+                open_lots,
+                disposals: Vec::new(),
+                open_lots_calls: Arc::new(AtomicUsize::new(0)),
+                open_lots_for_asset_calls: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+
+        fn with_disposals(mut self, disposals: Vec<crate::lots::LotDisposal>) -> Self {
+            self.disposals = disposals;
+            self
+        }
+
+        fn open_lots_calls(&self) -> Arc<AtomicUsize> {
+            self.open_lots_calls.clone()
+        }
+
+        fn open_lots_for_asset_calls(&self) -> Arc<AtomicUsize> {
+            self.open_lots_for_asset_calls.clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl LotRepositoryTrait for MockLotRepository {
+        async fn replace_lots_for_account(
+            &self,
+            _account_id: &str,
+            _lots: &[LotRecord],
+        ) -> Result<()> {
+            unimplemented!("unused in holdings service tests")
+        }
+
+        async fn get_open_lots_for_account(&self, _account_id: &str) -> Result<Vec<LotRecord>> {
+            self.open_lots_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(self
+                .open_lots
+                .iter()
+                .filter(|lot| lot.account_id == _account_id)
+                .cloned()
+                .collect())
+        }
+
+        async fn get_open_lots_for_account_asset(
+            &self,
+            _account_id: &str,
+            asset_id: &str,
+        ) -> Result<Vec<LotRecord>> {
+            self.open_lots_for_asset_calls
+                .fetch_add(1, Ordering::SeqCst);
+            Ok(self
+                .open_lots
+                .iter()
+                .filter(|lot| lot.account_id == _account_id && lot.asset_id == asset_id)
+                .cloned()
+                .collect())
+        }
+
+        async fn get_lot_disposals_for_account(
+            &self,
+            account_id: &str,
+        ) -> Result<Vec<crate::lots::LotDisposal>> {
+            Ok(self
+                .disposals
+                .iter()
+                .filter(|disposal| disposal.account_id == account_id)
+                .cloned()
+                .collect())
+        }
+
+        async fn get_all_open_lots(&self) -> Result<Vec<LotRecord>> {
+            unimplemented!("unused in holdings service tests")
+        }
+
+        async fn get_lots_as_of_date(
+            &self,
+            _account_ids: &[String],
+            _date: NaiveDate,
+        ) -> Result<Vec<LotRecord>> {
+            unimplemented!("unused in holdings service tests")
+        }
+
+        async fn get_all_lots_for_account(&self, _account_id: &str) -> Result<Vec<LotRecord>> {
+            unimplemented!("unused in holdings service tests")
+        }
+
+        async fn get_lots_for_asset(&self, _asset_id: &str) -> Result<Vec<LotRecord>> {
+            unimplemented!("unused in holdings service tests")
+        }
+
+        async fn get_asset_lot_view(
+            &self,
+            _asset_id: &str,
+            _include_snapshot_positions: bool,
+        ) -> Result<Vec<AssetLotView>> {
+            unimplemented!("unused in holdings service tests")
+        }
+
+        async fn get_all_lots(&self) -> Result<Vec<LotRecord>> {
+            unimplemented!("unused in holdings service tests")
+        }
+
+        async fn sync_lots_for_account(
+            &self,
+            _account_id: &str,
+            _open_lots: &[LotRecord],
+            _closures: &[LotClosure],
+        ) -> Result<()> {
+            unimplemented!("unused in holdings service tests")
+        }
+
+        async fn get_open_position_quantities(&self) -> Result<HashMap<String, Decimal>> {
+            unimplemented!("unused in holdings service tests")
+        }
+
+        fn count_lots(&self) -> Result<i64> {
+            unimplemented!("unused in holdings service tests")
         }
     }
 
@@ -1456,6 +2269,113 @@ mod tests {
         }
     }
 
+    fn test_lot_record(
+        account_id: &str,
+        asset_id: &str,
+        base_currency: &str,
+        remaining_cost_basis_base: Decimal,
+    ) -> LotRecord {
+        let now = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+        LotRecord {
+            id: format!("LOT-{asset_id}-{base_currency}"),
+            account_id: account_id.to_string(),
+            asset_id: asset_id.to_string(),
+            open_date: "2024-01-01".to_string(),
+            open_activity_id: Some(format!("ACT-{asset_id}")),
+            original_quantity: "1".to_string(),
+            remaining_quantity: "1".to_string(),
+            cost_per_unit: "100".to_string(),
+            original_cost_basis: "100".to_string(),
+            remaining_cost_basis: "100".to_string(),
+            original_cost_basis_base: remaining_cost_basis_base.to_string(),
+            remaining_cost_basis_base: remaining_cost_basis_base.to_string(),
+            fee_allocated: "0".to_string(),
+            fee_allocated_base: "0".to_string(),
+            currency: "USD".to_string(),
+            base_currency: base_currency.to_string(),
+            fx_rate_to_base: "1".to_string(),
+            cost_basis_method: "FIFO".to_string(),
+            split_ratio: "1".to_string(),
+            is_closed: false,
+            close_date: None,
+            close_activity_id: None,
+            created_at: now.clone(),
+            updated_at: now,
+        }
+    }
+
+    fn test_lot_disposal(
+        account_id: &str,
+        asset_id: &str,
+        cost_basis: Decimal,
+        cost_basis_base: Decimal,
+        realized_pnl: Decimal,
+        realized_pnl_base: Decimal,
+    ) -> crate::lots::LotDisposal {
+        let now = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+        crate::lots::LotDisposal {
+            id: format!("DISP-{account_id}-{asset_id}"),
+            lot_id: format!("LOT-{account_id}-{asset_id}"),
+            account_id: account_id.to_string(),
+            asset_id: asset_id.to_string(),
+            disposal_activity_id: format!("SELL-{account_id}-{asset_id}"),
+            disposal_date: "2025-01-02".to_string(),
+            quantity: "1".to_string(),
+            proceeds: (cost_basis + realized_pnl).to_string(),
+            cost_basis: cost_basis.to_string(),
+            realized_pnl: realized_pnl.to_string(),
+            proceeds_base: (cost_basis_base + realized_pnl_base).to_string(),
+            cost_basis_base: cost_basis_base.to_string(),
+            realized_pnl_base: realized_pnl_base.to_string(),
+            currency: "USD".to_string(),
+            base_currency: "USD".to_string(),
+            fx_rate_to_base: "1".to_string(),
+            cost_basis_method: "FIFO".to_string(),
+            created_at: now,
+        }
+    }
+
+    fn test_income_activity(
+        id: &str,
+        account_id: &str,
+        asset_id: Option<&str>,
+        activity_type: &str,
+        amount: Decimal,
+        currency: &str,
+        date: NaiveDate,
+    ) -> Activity {
+        let now = Utc::now();
+        Activity {
+            id: id.to_string(),
+            account_id: account_id.to_string(),
+            asset_id: asset_id.map(str::to_string),
+            activity_type: activity_type.to_string(),
+            activity_type_override: None,
+            source_type: None,
+            subtype: None,
+            status: ActivityStatus::Posted,
+            activity_date: date.and_hms_opt(12, 0, 0).unwrap().and_utc(),
+            settlement_date: None,
+            quantity: None,
+            unit_price: None,
+            amount: Some(amount),
+            fee: None,
+            currency: currency.to_string(),
+            fx_rate: None,
+            notes: None,
+            metadata: None,
+            source_system: None,
+            source_record_id: None,
+            source_group_id: None,
+            idempotency_key: None,
+            import_run_id: None,
+            is_user_modified: false,
+            needs_review: false,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
     fn test_service(
         snapshot: AccountStateSnapshot,
         assets: Vec<Asset>,
@@ -1558,6 +2478,453 @@ mod tests {
         assert!(holding.is_none());
     }
 
+    #[tokio::test]
+    async fn get_holdings_seeds_historical_base_cost_basis_from_open_lots_once() {
+        let account_id = "acc-1";
+        let asset_id = "AAPL";
+        let mut position = test_position(account_id, asset_id);
+        position.average_cost = dec!(1000);
+        position.total_cost_basis = dec!(1000);
+
+        let snapshot = AccountStateSnapshot {
+            account_id: account_id.to_string(),
+            currency: "USD".to_string(),
+            positions: HashMap::from([(asset_id.to_string(), position)]),
+            ..Default::default()
+        };
+        let lot_repository = MockLotRepository::new(vec![
+            test_lot_record(account_id, asset_id, "EUR", dec!(600)),
+            test_lot_record(account_id, asset_id, "EUR", dec!(400)),
+        ]);
+        let open_lots_calls = lot_repository.open_lots_calls();
+        let service = test_service(
+            snapshot,
+            vec![test_asset(asset_id, "AAPL", InstrumentType::Equity)],
+            HashMap::from([(asset_id.to_string(), dec!(1100))]),
+        )
+        .with_lot_repository(Arc::new(lot_repository));
+
+        let holdings = service.get_holdings(account_id, "EUR").await.unwrap();
+
+        assert_eq!(open_lots_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(holdings.len(), 1);
+        assert_eq!(holdings[0].cost_basis.as_ref().unwrap().base, dec!(1000));
+    }
+
+    #[tokio::test]
+    async fn get_holdings_skips_historical_base_cost_basis_on_lot_base_currency_mismatch() {
+        let account_id = "acc-1";
+        let asset_id = "AAPL";
+        let mut position = test_position(account_id, asset_id);
+        position.average_cost = dec!(1000);
+        position.total_cost_basis = dec!(1000);
+
+        let snapshot = AccountStateSnapshot {
+            account_id: account_id.to_string(),
+            currency: "USD".to_string(),
+            positions: HashMap::from([(asset_id.to_string(), position)]),
+            ..Default::default()
+        };
+        let lot_repository = MockLotRepository::new(vec![
+            test_lot_record(account_id, asset_id, "EUR", dec!(600)),
+            test_lot_record(account_id, asset_id, "CAD", dec!(400)),
+        ]);
+        let service = test_service(
+            snapshot,
+            vec![test_asset(asset_id, "AAPL", InstrumentType::Equity)],
+            HashMap::from([(asset_id.to_string(), dec!(1100))]),
+        )
+        .with_lot_repository(Arc::new(lot_repository));
+
+        let holdings = service.get_holdings(account_id, "EUR").await.unwrap();
+
+        assert_eq!(holdings.len(), 1);
+        assert_eq!(holdings[0].cost_basis.as_ref().unwrap().base, Decimal::ZERO);
+    }
+
+    #[tokio::test]
+    async fn get_holdings_skips_historical_base_cost_basis_on_invalid_lot_basis() {
+        let account_id = "acc-1";
+        let asset_id = "AAPL";
+        let mut position = test_position(account_id, asset_id);
+        position.average_cost = dec!(1000);
+        position.total_cost_basis = dec!(1000);
+
+        let snapshot = AccountStateSnapshot {
+            account_id: account_id.to_string(),
+            currency: "USD".to_string(),
+            positions: HashMap::from([(asset_id.to_string(), position)]),
+            ..Default::default()
+        };
+        let mut invalid_lot = test_lot_record(account_id, asset_id, "EUR", dec!(600));
+        invalid_lot.remaining_cost_basis_base = "not-a-decimal".to_string();
+        let lot_repository = MockLotRepository::new(vec![
+            test_lot_record(account_id, asset_id, "EUR", dec!(400)),
+            invalid_lot,
+        ]);
+        let service = test_service(
+            snapshot,
+            vec![test_asset(asset_id, "AAPL", InstrumentType::Equity)],
+            HashMap::from([(asset_id.to_string(), dec!(1100))]),
+        )
+        .with_lot_repository(Arc::new(lot_repository));
+
+        let holdings = service.get_holdings(account_id, "EUR").await.unwrap();
+
+        assert_eq!(holdings.len(), 1);
+        assert_eq!(holdings[0].cost_basis.as_ref().unwrap().base, Decimal::ZERO);
+    }
+
+    #[tokio::test]
+    async fn get_holding_loads_open_lots_for_requested_asset_only() {
+        let account_id = "acc-1";
+        let asset_id = "AAPL";
+        let other_asset_id = "MSFT";
+        let mut positions = HashMap::new();
+        positions.insert(asset_id.to_string(), test_position(account_id, asset_id));
+        positions.insert(
+            other_asset_id.to_string(),
+            test_position(account_id, other_asset_id),
+        );
+
+        let snapshot = AccountStateSnapshot {
+            account_id: account_id.to_string(),
+            currency: "USD".to_string(),
+            positions,
+            ..Default::default()
+        };
+        let lot_repository = MockLotRepository::new(vec![
+            test_lot_record(account_id, asset_id, "EUR", dec!(1000)),
+            test_lot_record(account_id, other_asset_id, "EUR", dec!(2000)),
+        ]);
+        let open_lots_calls = lot_repository.open_lots_calls();
+        let open_lots_for_asset_calls = lot_repository.open_lots_for_asset_calls();
+        let service = test_service(
+            snapshot,
+            vec![
+                test_asset(asset_id, "AAPL", InstrumentType::Equity),
+                test_asset(other_asset_id, "MSFT", InstrumentType::Equity),
+            ],
+            HashMap::from([
+                (asset_id.to_string(), dec!(1100)),
+                (other_asset_id.to_string(), dec!(2200)),
+            ]),
+        )
+        .with_lot_repository(Arc::new(lot_repository));
+
+        let holding = service
+            .get_holding(account_id, asset_id, "EUR")
+            .await
+            .unwrap()
+            .expect("holding should exist");
+
+        assert_eq!(open_lots_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(open_lots_for_asset_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(holding.cost_basis.as_ref().unwrap().base, dec!(1000));
+    }
+
+    #[tokio::test]
+    async fn get_holdings_does_not_seed_historical_base_cost_basis_for_alternative_assets() {
+        let account_id = "acc-1";
+        let asset_id = "PROPERTY-1";
+        let mut asset = test_asset(asset_id, "Property", InstrumentType::Equity);
+        asset.kind = AssetKind::Property;
+
+        let mut position = test_position(account_id, asset_id);
+        position.total_cost_basis = dec!(1000);
+        position.is_alternative = true;
+
+        let snapshot = AccountStateSnapshot {
+            account_id: account_id.to_string(),
+            currency: "USD".to_string(),
+            positions: HashMap::from([(asset_id.to_string(), position)]),
+            ..Default::default()
+        };
+        let lot_repository = MockLotRepository::new(vec![test_lot_record(
+            account_id,
+            asset_id,
+            "EUR",
+            dec!(1000),
+        )]);
+        let open_lots_calls = lot_repository.open_lots_calls();
+        let open_lots_for_asset_calls = lot_repository.open_lots_for_asset_calls();
+        let service = test_service(
+            snapshot,
+            vec![asset],
+            HashMap::from([(asset_id.to_string(), dec!(1100))]),
+        )
+        .with_lot_repository(Arc::new(lot_repository));
+
+        let holdings = service.get_holdings(account_id, "EUR").await.unwrap();
+
+        assert_eq!(holdings.len(), 1);
+        assert_eq!(holdings[0].holding_type, HoldingType::AlternativeAsset);
+        assert_eq!(holdings[0].cost_basis.as_ref().unwrap().base, Decimal::ZERO);
+        assert_eq!(open_lots_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(open_lots_for_asset_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn asset_income_uses_flow_date_fx_and_requires_matching_asset_id() {
+        let date = NaiveDate::from_ymd_opt(2025, 2, 3).unwrap();
+        let fx_service = MockFxService::new(vec![
+            ("EUR", "CAD", date, dec!(1.5)),
+            ("EUR", "USD", date, dec!(1.1)),
+        ]);
+        let asset_currencies = HashMap::from([("AAPL".to_string(), "CAD".to_string())]);
+        let mut pending = test_income_activity(
+            "pending",
+            "acc-1",
+            Some("AAPL"),
+            ACTIVITY_TYPE_DIVIDEND,
+            dec!(10),
+            "EUR",
+            date,
+        );
+        pending.status = ActivityStatus::Pending;
+
+        let activities = vec![
+            test_income_activity(
+                "dividend",
+                "acc-1",
+                Some("AAPL"),
+                ACTIVITY_TYPE_DIVIDEND,
+                dec!(10),
+                "EUR",
+                date,
+            ),
+            test_income_activity(
+                "cash-interest",
+                "acc-1",
+                None,
+                ACTIVITY_TYPE_INTEREST,
+                dec!(99),
+                "EUR",
+                date,
+            ),
+            test_income_activity(
+                "other-asset",
+                "acc-1",
+                Some("MSFT"),
+                ACTIVITY_TYPE_DIVIDEND,
+                dec!(99),
+                "EUR",
+                date,
+            ),
+            test_income_activity("buy", "acc-1", Some("AAPL"), "BUY", dec!(99), "EUR", date),
+            pending,
+        ];
+
+        let income_by_asset = calculate_asset_income(
+            &activities,
+            &asset_currencies,
+            "USD",
+            &fx_service,
+            chrono_tz::UTC,
+        );
+
+        assert_eq!(income_by_asset.len(), 1);
+        let income = income_by_asset.get("AAPL").unwrap();
+        assert_eq!(income.local, dec!(15));
+        assert_eq!(income.base, dec!(11));
+    }
+
+    #[test]
+    fn asset_income_uses_user_timezone_for_flow_date_fx() {
+        let local_date = NaiveDate::from_ymd_opt(2025, 2, 3).unwrap();
+        let utc_date = NaiveDate::from_ymd_opt(2025, 2, 4).unwrap();
+        let fx_service = MockFxService::new(vec![
+            ("EUR", "CAD", local_date, dec!(1.5)),
+            ("EUR", "USD", local_date, dec!(1.1)),
+            ("EUR", "CAD", utc_date, dec!(9)),
+            ("EUR", "USD", utc_date, dec!(9)),
+        ]);
+        let asset_currencies = HashMap::from([("AAPL".to_string(), "CAD".to_string())]);
+        let mut activity = test_income_activity(
+            "dividend",
+            "acc-1",
+            Some("AAPL"),
+            ACTIVITY_TYPE_DIVIDEND,
+            dec!(10),
+            "EUR",
+            utc_date,
+        );
+        activity.activity_date = utc_date.and_hms_opt(2, 0, 0).unwrap().and_utc();
+
+        let income_by_asset = calculate_asset_income(
+            &[activity],
+            &asset_currencies,
+            "USD",
+            &fx_service,
+            chrono_tz::America::Toronto,
+        );
+
+        let income = income_by_asset.get("AAPL").unwrap();
+        assert_eq!(income.local, dec!(15));
+        assert_eq!(income.base, dec!(11));
+    }
+
+    #[test]
+    fn asset_income_denormalizes_to_minor_holding_currency() {
+        let date = NaiveDate::from_ymd_opt(2025, 2, 3).unwrap();
+        let fx_service = MockFxService::new(Vec::new());
+        let asset_currencies = HashMap::from([("LSE".to_string(), "GBp".to_string())]);
+        let activities = vec![test_income_activity(
+            "dividend",
+            "acc-1",
+            Some("LSE"),
+            ACTIVITY_TYPE_DIVIDEND,
+            dec!(10),
+            "GBP",
+            date,
+        )];
+
+        let income_by_asset = calculate_asset_income(
+            &activities,
+            &asset_currencies,
+            "GBP",
+            &fx_service,
+            chrono_tz::UTC,
+        );
+
+        let income = income_by_asset.get("LSE").unwrap();
+        assert_eq!(income.local, dec!(1000));
+        assert_eq!(income.base, dec!(10));
+    }
+
+    #[tokio::test]
+    async fn single_holding_computes_income_return_basis_and_total_return() {
+        let account_id = "acc-1";
+        let asset_id = "AAPL";
+        let mut position = test_position(account_id, asset_id);
+        position.total_cost_basis = dec!(100);
+
+        let snapshot = AccountStateSnapshot {
+            account_id: account_id.to_string(),
+            currency: "USD".to_string(),
+            positions: HashMap::from([(asset_id.to_string(), position)]),
+            ..Default::default()
+        };
+        let lot_repository = MockLotRepository::new(vec![test_lot_record(
+            account_id,
+            asset_id,
+            "USD",
+            dec!(100),
+        )])
+        .with_disposals(vec![test_lot_disposal(
+            account_id,
+            asset_id,
+            dec!(50),
+            dec!(50),
+            dec!(20),
+            dec!(20),
+        )]);
+        let income_service = MockHoldingIncomeService::new(HashMap::from([(
+            account_id.to_string(),
+            HashMap::from([(
+                asset_id.to_string(),
+                MonetaryValue {
+                    local: dec!(5),
+                    base: dec!(5),
+                },
+            )]),
+        )]));
+        let scopes = income_service.scopes();
+        let service = test_service(
+            snapshot,
+            vec![test_asset(asset_id, "AAPL", InstrumentType::Equity)],
+            HashMap::from([(asset_id.to_string(), dec!(130))]),
+        )
+        .with_lot_repository(Arc::new(lot_repository))
+        .with_income_service(Arc::new(income_service));
+
+        let holdings = service.get_holdings(account_id, "USD").await.unwrap();
+
+        assert_eq!(*scopes.lock().unwrap(), vec![vec![account_id.to_string()]]);
+        assert_eq!(holdings.len(), 1);
+        let holding = &holdings[0];
+        assert_eq!(holding.unrealized_gain.as_ref().unwrap().base, dec!(30));
+        assert_eq!(holding.realized_gain.as_ref().unwrap().base, dec!(20));
+        assert_eq!(holding.total_gain.as_ref().unwrap().base, dec!(50));
+        assert_eq!(holding.income.as_ref().unwrap().base, dec!(5));
+        assert_eq!(holding.total_return.as_ref().unwrap().base, dec!(55));
+        assert_eq!(holding.return_basis.as_ref().unwrap().base, dec!(150));
+        assert_eq!(holding.total_gain_pct, Some(dec!(0.33333333)));
+        assert_eq!(holding.total_return_pct, Some(dec!(0.36666667)));
+    }
+
+    #[tokio::test]
+    async fn multi_account_aggregation_sums_income_and_recomputes_return_percentages() {
+        let asset_id = "AAPL";
+        let account_one = "acc-1";
+        let account_two = "acc-2";
+        let mut position = test_position(account_one, asset_id);
+        position.total_cost_basis = dec!(100);
+
+        let snapshot = AccountStateSnapshot {
+            account_id: account_one.to_string(),
+            currency: "USD".to_string(),
+            positions: HashMap::from([(asset_id.to_string(), position)]),
+            ..Default::default()
+        };
+        let lot_repository = MockLotRepository::new(vec![
+            test_lot_record(account_one, asset_id, "USD", dec!(100)),
+            test_lot_record(account_two, asset_id, "USD", dec!(100)),
+        ]);
+        let income_service = MockHoldingIncomeService::new(HashMap::from([
+            (
+                account_one.to_string(),
+                HashMap::from([(
+                    asset_id.to_string(),
+                    MonetaryValue {
+                        local: dec!(5),
+                        base: dec!(5),
+                    },
+                )]),
+            ),
+            (
+                account_two.to_string(),
+                HashMap::from([(
+                    asset_id.to_string(),
+                    MonetaryValue {
+                        local: dec!(7),
+                        base: dec!(7),
+                    },
+                )]),
+            ),
+        ]));
+        let scopes = income_service.scopes();
+        let service = test_service(
+            snapshot,
+            vec![test_asset(asset_id, "AAPL", InstrumentType::Equity)],
+            HashMap::from([(asset_id.to_string(), dec!(110))]),
+        )
+        .with_lot_repository(Arc::new(lot_repository))
+        .with_income_service(Arc::new(income_service));
+
+        let holdings = service
+            .get_holdings_for_accounts(
+                &[account_one.to_string(), account_two.to_string()],
+                "USD",
+                "portfolio",
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            *scopes.lock().unwrap(),
+            vec![vec![account_one.to_string()], vec![account_two.to_string()]]
+        );
+        assert_eq!(holdings.len(), 1);
+        let holding = &holdings[0];
+        assert_eq!(holding.income.as_ref().unwrap().base, dec!(12));
+        assert_eq!(holding.total_gain.as_ref().unwrap().base, dec!(20));
+        assert_eq!(holding.total_return.as_ref().unwrap().base, dec!(32));
+        assert_eq!(holding.return_basis.as_ref().unwrap().base, dec!(200));
+        assert_eq!(holding.total_gain_pct, Some(dec!(0.1)));
+        assert_eq!(holding.total_return_pct, Some(dec!(0.16)));
+    }
+
     #[test]
     fn normalize_holding_currency_converts_minor_security_units() {
         let as_of = valuation_date_today();
@@ -1619,6 +2986,19 @@ mod tests {
                 base: dec!(0.9),
             }),
             total_gain_pct: Some(dec!(0.03)),
+            income: Some(MonetaryValue {
+                local: dec!(10),
+                base: dec!(0.1),
+            }),
+            total_return: Some(MonetaryValue {
+                local: dec!(100),
+                base: dec!(1),
+            }),
+            total_return_pct: Some(dec!(0.033333333333333333)),
+            return_basis: Some(MonetaryValue {
+                local: dec!(3000),
+                base: dec!(30),
+            }),
             day_change: Some(MonetaryValue {
                 local: dec!(-44),
                 base: dec!(-0.44),
@@ -1646,6 +3026,12 @@ mod tests {
         assert_eq!(holding.cost_basis.as_ref().unwrap().base, dec!(30));
         assert_eq!(holding.unrealized_gain.as_ref().unwrap().local, dec!(0.9));
         assert_eq!(holding.unrealized_gain.as_ref().unwrap().base, dec!(0.9));
+        assert_eq!(holding.income.as_ref().unwrap().local, dec!(0.1));
+        assert_eq!(holding.income.as_ref().unwrap().base, dec!(0.1));
+        assert_eq!(holding.total_return.as_ref().unwrap().local, dec!(1));
+        assert_eq!(holding.total_return.as_ref().unwrap().base, dec!(1));
+        assert_eq!(holding.return_basis.as_ref().unwrap().local, dec!(30));
+        assert_eq!(holding.return_basis.as_ref().unwrap().base, dec!(30));
         assert_eq!(holding.day_change.as_ref().unwrap().local, dec!(-0.44));
         assert_eq!(holding.day_change.as_ref().unwrap().base, dec!(-0.44));
         assert_eq!(
@@ -1689,6 +3075,13 @@ mod tests {
             realized_gain_pct: Some(Decimal::ZERO),
             total_gain: Some(MonetaryValue::zero()),
             total_gain_pct: Some(Decimal::ZERO),
+            income: Some(MonetaryValue::zero()),
+            total_return: Some(MonetaryValue::zero()),
+            total_return_pct: Some(Decimal::ZERO),
+            return_basis: Some(MonetaryValue {
+                local: dec!(1000),
+                base: dec!(10),
+            }),
             day_change: Some(MonetaryValue {
                 local: dec!(0),
                 base: dec!(0),

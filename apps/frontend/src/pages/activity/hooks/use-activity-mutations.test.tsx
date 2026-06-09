@@ -2,6 +2,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ActivityType } from "@/lib/constants";
+import type { ActivityDetails } from "@/lib/types";
 import { useActivityMutations } from "./use-activity-mutations";
 
 const adapterMocks = vi.hoisted(() => ({
@@ -118,6 +120,86 @@ describe("useActivityMutations", () => {
           symbol: "AAPL260116C00250000",
           instrumentType: "OPTION",
         }),
+      }),
+    );
+  });
+
+  it("does not copy derived amounts when duplicating price-bearing activities", async () => {
+    const { result } = renderHook(() => useActivityMutations(), { wrapper: createWrapper() });
+
+    await act(async () => {
+      await result.current.duplicateActivityMutation.mutateAsync({
+        id: "activity-1",
+        accountId: "acc-1",
+        activityType: "BUY",
+        date: "2026-04-30T16:00:00Z",
+        assetId: "asset-aapl",
+        assetSymbol: "AAPL",
+        exchangeMic: "XNAS",
+        quantity: 2,
+        unitPrice: 100,
+        amount: 200,
+        fee: 0,
+        currency: "USD",
+      } as any);
+    });
+
+    expect(adapterMocks.createActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        amount: undefined,
+        quantity: 2,
+        unitPrice: 100,
+      }),
+    );
+  });
+
+  it("copies bond trade amounts when duplicating buy and sell activities", async () => {
+    const { result } = renderHook(() => useActivityMutations(), { wrapper: createWrapper() });
+    const bondActivity = (
+      activityType: typeof ActivityType.BUY | typeof ActivityType.SELL,
+    ): ActivityDetails => ({
+      id: "activity-1",
+      accountId: "acc-1",
+      accountName: "Taxable",
+      accountCurrency: "CAD",
+      activityType,
+      date: new Date("2026-04-30T16:00:00Z"),
+      assetId: "asset-bond",
+      assetSymbol: "CA135087Q988",
+      assetName: "Canada Bond",
+      exchangeMic: "XTSE",
+      instrumentType: "BOND",
+      quantity: "1000",
+      unitPrice: "99",
+      amount: "990",
+      fee: "0",
+      currency: "CAD",
+      needsReview: false,
+      createdAt: new Date("2026-04-30T16:00:00Z"),
+      updatedAt: new Date("2026-04-30T16:00:00Z"),
+    });
+
+    await act(async () => {
+      await result.current.duplicateActivityMutation.mutateAsync(bondActivity(ActivityType.BUY));
+      await result.current.duplicateActivityMutation.mutateAsync(bondActivity(ActivityType.SELL));
+    });
+
+    expect(adapterMocks.createActivity).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        activityType: ActivityType.BUY,
+        amount: "990",
+        quantity: "1000",
+        unitPrice: "99",
+      }),
+    );
+    expect(adapterMocks.createActivity).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        activityType: ActivityType.SELL,
+        amount: "990",
+        quantity: "1000",
+        unitPrice: "99",
       }),
     );
   });

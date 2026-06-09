@@ -20,7 +20,8 @@ import { useBalancePrivacy } from "@/hooks/use-balance-privacy";
 
 const MAX_DISPLAYED_HOLDINGS = 7;
 const MAX_STACKED_AVATARS = 5;
-const SHOW_TOTAL_RETURN_KEY = "dashboard-holdings-widget-show-total-return";
+const PERFORMANCE_MODE_KEY = "dashboard-holdings-widget-performance-mode";
+type PerformanceMode = "daily" | "pnl" | "return";
 
 interface TopHoldingsProps {
   holdings: Holding[];
@@ -32,7 +33,7 @@ interface HoldingRowProps {
   holding: Holding;
   baseCurrency: string;
   isHidden?: boolean;
-  showTotalReturn: boolean;
+  performanceMode: PerformanceMode;
   showName: boolean;
   onClick?: () => void;
 }
@@ -41,7 +42,7 @@ function HoldingRow({
   holding,
   baseCurrency,
   isHidden,
-  showTotalReturn,
+  performanceMode,
   showName,
   onClick,
 }: HoldingRowProps) {
@@ -55,12 +56,18 @@ function HoldingRow({
     : `${(holding.quantity ?? 0).toLocaleString(undefined, { maximumFractionDigits: 3 })} shares`;
   const avatarSymbol = parsedOption ? parsedOption.underlying : symbol;
   const marketValue = holding.marketValue?.base ?? 0;
-  const gainAmount = showTotalReturn
-    ? (holding.totalGain?.base ?? holding.unrealizedGain?.base ?? 0)
-    : (holding.dayChange?.base ?? 0);
-  const gainPercent = showTotalReturn
-    ? (holding.totalGainPct ?? holding.unrealizedGainPct ?? 0)
-    : (holding.dayChangePct ?? 0);
+  const gainAmount =
+    performanceMode === "return"
+      ? (holding.totalReturn?.base ?? holding.totalGain?.base ?? 0)
+      : performanceMode === "pnl"
+        ? (holding.totalGain?.base ?? holding.unrealizedGain?.base ?? 0)
+        : (holding.dayChange?.base ?? 0);
+  const gainPercent =
+    performanceMode === "return"
+      ? (holding.totalReturnPct ?? holding.totalGainPct ?? 0)
+      : performanceMode === "pnl"
+        ? (holding.totalGainPct ?? holding.unrealizedGainPct ?? 0)
+        : (holding.dayChangePct ?? 0);
 
   return (
     <div
@@ -191,9 +198,9 @@ function TopHoldingsEmptyState() {
 export function TopHoldings({ holdings, isLoading, baseCurrency }: TopHoldingsProps) {
   const navigate = useNavigate();
   const { isBalanceHidden } = useBalancePrivacy();
-  const [showTotalReturn, setShowTotalReturn] = usePersistentState<boolean>(
-    SHOW_TOTAL_RETURN_KEY,
-    true,
+  const [performanceMode, setPerformanceMode] = usePersistentState<PerformanceMode>(
+    PERFORMANCE_MODE_KEY,
+    "pnl",
   );
   const [sortBy, setSortBy] = usePersistentState<"value" | "gain">(
     "holdings-widget-sort-by",
@@ -217,17 +224,23 @@ export function TopHoldings({ holdings, isLoading, baseCurrency }: TopHoldingsPr
       })
       .sort((a, b) => {
         if (sortBy === "gain") {
-          const gainA = showTotalReturn
-            ? (a.totalGain?.base ?? a.unrealizedGain?.base ?? 0)
-            : (a.dayChange?.base ?? 0);
-          const gainB = showTotalReturn
-            ? (b.totalGain?.base ?? b.unrealizedGain?.base ?? 0)
-            : (b.dayChange?.base ?? 0);
+          const gainA =
+            performanceMode === "return"
+              ? (a.totalReturn?.base ?? a.totalGain?.base ?? 0)
+              : performanceMode === "pnl"
+                ? (a.totalGain?.base ?? a.unrealizedGain?.base ?? 0)
+                : (a.dayChange?.base ?? 0);
+          const gainB =
+            performanceMode === "return"
+              ? (b.totalReturn?.base ?? b.totalGain?.base ?? 0)
+              : performanceMode === "pnl"
+                ? (b.totalGain?.base ?? b.unrealizedGain?.base ?? 0)
+                : (b.dayChange?.base ?? 0);
           return gainB - gainA;
         }
         return (b.marketValue?.base ?? 0) - (a.marketValue?.base ?? 0);
       });
-  }, [holdings, sortBy, showTotalReturn]);
+  }, [holdings, sortBy, performanceMode]);
 
   // Show one extra holding directly rather than displaying "+1 more"
   const displayCount =
@@ -269,22 +282,22 @@ export function TopHoldings({ holdings, isLoading, baseCurrency }: TopHoldingsPr
               <p className="text-muted-foreground px-2 py-1.5 text-xs font-medium uppercase tracking-wider">
                 Show
               </p>
-              {(["total", "daily"] as const).map((v) => (
+              {(["daily", "pnl", "return"] as const).map((v) => (
                 <button
                   key={v}
                   className="hover:bg-accent flex w-full items-center justify-between rounded-xl px-3 py-3 text-sm font-medium transition-colors"
-                  onClick={() => setShowTotalReturn(v === "total")}
+                  onClick={() => setPerformanceMode(v)}
                 >
-                  {v === "total" ? "Total Return" : "Daily Change"}
+                  {v === "daily" ? "Daily Change" : v === "pnl" ? "Total P&L" : "Total Return"}
                   <span
                     className={cn(
                       "flex h-4 w-4 items-center justify-center rounded-full border-2",
-                      (v === "total") === showTotalReturn
+                      performanceMode === v
                         ? "border-primary bg-primary"
                         : "border-muted-foreground",
                     )}
                   >
-                    {(v === "total") === showTotalReturn && (
+                    {performanceMode === v && (
                       <span className="bg-primary-foreground h-1.5 w-1.5 rounded-full" />
                     )}
                   </span>
@@ -358,7 +371,7 @@ export function TopHoldings({ holdings, isLoading, baseCurrency }: TopHoldingsPr
             holding={holding}
             baseCurrency={baseCurrency}
             isHidden={isBalanceHidden}
-            showTotalReturn={showTotalReturn}
+            performanceMode={performanceMode}
             showName={displayMode === "name"}
             onClick={() => navigate(`/holdings/${encodeURIComponent(assetId)}`)}
           />

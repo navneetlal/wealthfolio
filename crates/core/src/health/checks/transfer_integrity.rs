@@ -52,7 +52,7 @@ impl TransferIntegrityCheck {
         Self
     }
 
-    /// Builds a single aggregated health issue for all invalid transfer groups.
+    /// Builds a single aggregated health issue for all invalid or unreviewed transfer groups.
     pub fn analyze(
         &self,
         groups: &[InvalidTransferGroupInfo],
@@ -107,7 +107,7 @@ impl TransferIntegrityCheck {
             .category(HealthCategory::DataConsistency)
             .title(title)
             .message(
-                "A transfer is missing its matching leg, so its flow was treated as external and may distort returns. Add or fix the missing leg in Activities.",
+                "A transfer is unpaired or missing its matching leg, so its flow was treated as external and may distort returns. Pair it with the matching transfer, or mark it external if that is intended.",
             )
             .affected_count(count as u32)
             .navigate_action(navigate)
@@ -208,7 +208,7 @@ fn format_group_details(group: &InvalidTransferGroupInfo) -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "{}:\n{}\n  → A matching leg is missing, so this flow was treated as external.",
+        "{}:\n{}\n  → This transfer was treated as external; pair it or mark it external if intended.",
         when, legs
     )
 }

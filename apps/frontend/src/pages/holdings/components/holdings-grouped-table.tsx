@@ -16,11 +16,13 @@ import { useSettingsContext } from "@/lib/settings-provider";
 import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 
+type PerformanceMode = "daily" | "pnl" | "return";
+
 interface HoldingsGroupedTableProps {
   holdings: Holding[];
   accountTypeMap: Map<string, string>; // accountId -> accountType
   linkedLiabilities: Map<string, Holding[]>; // assetId -> linked liabilities
-  showTotalReturn: boolean;
+  performanceMode: PerformanceMode;
   showConvertedValues: boolean;
   isLoading: boolean;
 }
@@ -46,7 +48,7 @@ export function HoldingsGroupedTable({
   holdings,
   accountTypeMap,
   linkedLiabilities,
-  showTotalReturn,
+  performanceMode,
   showConvertedValues,
   isLoading,
 }: HoldingsGroupedTableProps) {
@@ -153,7 +155,7 @@ export function HoldingsGroupedTable({
                 <HoldingRow
                   key={holding.id}
                   holding={holding}
-                  showTotalReturn={showTotalReturn}
+                  performanceMode={performanceMode}
                   showConvertedValues={showConvertedValues}
                   isBalanceHidden={isBalanceHidden}
                   navigate={navigate}
@@ -169,7 +171,7 @@ export function HoldingsGroupedTable({
 
 interface HoldingRowProps {
   holding: HoldingWithMeta;
-  showTotalReturn: boolean;
+  performanceMode: PerformanceMode;
   showConvertedValues: boolean;
   isBalanceHidden: boolean;
   navigate: (path: string, options?: { state?: { holding: Holding } }) => void;
@@ -178,7 +180,7 @@ interface HoldingRowProps {
 
 function HoldingRow({
   holding,
-  showTotalReturn,
+  performanceMode,
   showConvertedValues,
   isBalanceHidden,
   navigate,
@@ -207,9 +209,24 @@ function HoldingRow({
   // For liabilities, display value as negative
   const displayValue = holding.isLiability ? -Math.abs(marketValue) : marketValue;
 
-  const valueBase = showTotalReturn ? holding.totalGain?.base : holding.dayChange?.base;
-  const gainValue = showConvertedValues ? valueBase : safeDivide(valueBase ?? 0, fxRate);
-  const gainPct = showTotalReturn ? holding.totalGainPct : holding.dayChangePct;
+  const gainValue =
+    performanceMode === "return"
+      ? showConvertedValues
+        ? (holding.totalReturn?.base ?? holding.totalGain?.base ?? 0)
+        : (holding.totalReturn?.local ?? holding.totalGain?.local ?? 0)
+      : performanceMode === "pnl"
+        ? showConvertedValues
+          ? (holding.totalGain?.base ?? 0)
+          : (holding.totalGain?.local ?? 0)
+        : showConvertedValues
+          ? (holding.dayChange?.base ?? 0)
+          : (holding.dayChange?.local ?? 0);
+  const gainPct =
+    performanceMode === "return"
+      ? (holding.totalReturnPct ?? holding.totalGainPct)
+      : performanceMode === "pnl"
+        ? holding.totalGainPct
+        : holding.dayChangePct;
 
   return (
     <>
@@ -282,7 +299,7 @@ function HoldingRow({
         <HoldingRow
           key={liability.id}
           holding={{ ...liability, isLiability: true } as HoldingWithMeta}
-          showTotalReturn={showTotalReturn}
+          performanceMode={performanceMode}
           showConvertedValues={showConvertedValues}
           isBalanceHidden={isBalanceHidden}
           navigate={navigate}

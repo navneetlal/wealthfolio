@@ -14,7 +14,7 @@ import { useMemo, useSyncExternalStore, type FC } from "react";
 import { Link } from "react-router-dom";
 import { Tooltip as ChartTooltip, type TreemapNode, Treemap } from "recharts";
 
-type ReturnType = "daily" | "total";
+type ReturnType = "daily" | "pnl" | "return";
 type DisplayMode = "symbol" | "name";
 
 function noop() {
@@ -64,8 +64,11 @@ const DisplayModeToggle: React.FC<{
 // sage to a deep green, losses from a light clay to a deep red.
 const POS_LO = [205, 217, 191]; // #cdd9bf
 const POS_HI = [53, 92, 76]; // #355c4c
-const NEG_LO = [236, 201, 192]; // #ecc9c0
-const NEG_HI = [176, 74, 60]; // #b04a3c
+// Loss ramp tuned to the theme's --destructive (flexoki red). NEG_HI matches the
+// dark-mode token hsl(5 61% 54%) = #d14e42; NEG_LO is a saturated tint of the same
+// hue so small losses read red-tinted instead of washed-out pink.
+const NEG_LO = [233, 179, 168]; // #e9b3a8
+const NEG_HI = [209, 78, 66]; // #d14e42
 
 const lerp = (a: number, b: number, t: number) => Math.round(a + (b - a) * t);
 
@@ -174,7 +177,7 @@ const CustomizedContent: FC<CustomizedContentProps> = ({
           fill: depth === 1 ? fillColor : undefined,
           // Soften tiles in dark mode so they blend into the background instead
           // of reading as bright rectangles on near-black.
-          fillOpacity: depth === 1 && isDark ? 0.88 : undefined,
+          fillOpacity: depth === 1 && isDark ? 0.45 : undefined,
           cursor: "pointer",
         }}
       />
@@ -292,7 +295,7 @@ const CompositionTooltip = ({ active, payload, settings }: TooltipProps) => {
 
 export function PortfolioComposition({ holdings, isLoading }: PortfolioCompositionProps) {
   const [returnType, setReturnType] = usePersistentState<ReturnType>(
-    "composition-return-type",
+    "composition-performance-mode",
     "daily",
   );
   const [displayMode, setDisplayMode] = usePersistentState<DisplayMode>(
@@ -316,7 +319,9 @@ export function PortfolioComposition({ holdings, isLoading }: PortfolioCompositi
         const gain =
           returnType === "daily"
             ? Number(holding.dayChangePct) || 0
-            : Number(holding.totalGainPct) || 0;
+            : returnType === "return"
+              ? Number(holding.totalReturnPct) || 0
+              : Number(holding.totalGainPct) || 0;
 
         const marketValue = Number(holding.marketValue?.base) || 0;
 
@@ -395,7 +400,8 @@ export function PortfolioComposition({ holdings, isLoading }: PortfolioCompositi
           <AnimatedToggleGroup
             items={[
               { value: "daily", label: "Daily" },
-              { value: "total", label: "Total" },
+              { value: "pnl", label: "P&L" },
+              { value: "return", label: "Return" },
             ]}
             value={returnType}
             onValueChange={(value: ReturnType) => setReturnType(value)}

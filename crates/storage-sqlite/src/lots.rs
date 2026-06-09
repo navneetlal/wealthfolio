@@ -261,6 +261,26 @@ impl LotRepositoryTrait for LotsRepository {
         Ok(rows.into_iter().map(LotRecord::from).collect())
     }
 
+    async fn get_open_lots_for_account_asset(
+        &self,
+        account_id: &str,
+        asset_id: &str,
+    ) -> Result<Vec<LotRecord>> {
+        use crate::schema::lots::dsl;
+
+        let account_id = account_id.to_string();
+        let asset_id = asset_id.to_string();
+        let mut conn = get_connection(&self.pool)?;
+        let rows: Vec<LotRecordDB> = dsl::lots
+            .filter(dsl::account_id.eq(&account_id))
+            .filter(dsl::asset_id.eq(&asset_id))
+            .filter(dsl::is_closed.eq(0))
+            .load(&mut conn)
+            .map_err(StorageError::from)?;
+
+        Ok(rows.into_iter().map(LotRecord::from).collect())
+    }
+
     async fn get_all_open_lots(&self) -> Result<Vec<LotRecord>> {
         use crate::schema::lots::dsl;
 
@@ -796,6 +816,7 @@ fn parse_nonzero_ratio(value: &str) -> Decimal {
 struct LotDisposalTotals {
     proceeds: Decimal,
     cost_basis: Decimal,
+    cost_basis_base: Decimal,
     realized_pnl: Decimal,
     realized_pnl_base: Decimal,
 }
@@ -816,6 +837,7 @@ fn load_lot_disposal_totals_by_lot(
         let entry = totals.entry(row.lot_id).or_default();
         entry.proceeds += parse_decimal(&row.proceeds);
         entry.cost_basis += parse_decimal(&row.cost_basis);
+        entry.cost_basis_base += parse_decimal(&row.cost_basis_base);
         entry.realized_pnl += parse_decimal(&row.realized_pnl);
         entry.realized_pnl_base += parse_decimal(&row.realized_pnl_base);
     }
@@ -834,6 +856,7 @@ fn transaction_lot_view_row(
     let original_quantity = parse_decimal(&row.original_quantity);
     let disposal_proceeds = disposal_totals.map(|totals| totals.proceeds);
     let disposal_cost_basis = disposal_totals.map(|totals| totals.cost_basis);
+    let disposal_cost_basis_base = disposal_totals.map(|totals| totals.cost_basis_base);
     let realized_pnl = disposal_totals.map(|totals| totals.realized_pnl);
     let realized_pnl_base = disposal_totals.map(|totals| totals.realized_pnl_base);
 
@@ -859,6 +882,7 @@ fn transaction_lot_view_row(
         close_date: row.close_date,
         disposal_proceeds,
         disposal_cost_basis,
+        disposal_cost_basis_base,
         realized_pnl,
         realized_pnl_base,
     }
@@ -897,6 +921,7 @@ fn snapshot_position_view_row(
         close_date: None,
         disposal_proceeds: None,
         disposal_cost_basis: None,
+        disposal_cost_basis_base: None,
         realized_pnl: None,
         realized_pnl_base: None,
     }

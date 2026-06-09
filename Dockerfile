@@ -91,5 +91,5 @@ RUN addgroup -S -g 1000 wealthfolio \
 USER 1000:1000
 
 VOLUME ["/data"]
-EXPOSE 8080
+EXPOSE 8088
 CMD ["/usr/local/bin/wealthfolio-server"]

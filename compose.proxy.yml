@@ -1,0 +1,13 @@
+# Wealthfolio - Reverse proxy overrides
+#
+# Usage: docker compose --env-file .env.docker -f compose.yml -f compose.proxy.yml up -d
+#
+# For reverse proxies on the same Docker network (Coolify, Caddy, Traefik,
+# Nginx Proxy Manager), avoid publishing the app port to the host. The proxy
+# should route to http://wealthfolio:8088.
+
+services:
+  wealthfolio:
+    ports: !reset []
+    expose:
+      - "8088"

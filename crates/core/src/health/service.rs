@@ -11,10 +11,11 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::accounts::{account_types, is_liability_account_type, AccountServiceTrait};
-use crate::activities::{ActivityServiceTrait, TransferPairResolution};
+use crate::activities::{Activity, ActivityServiceTrait, TransferPairResolution};
 use crate::assets::AssetServiceTrait;
 use crate::errors::Result;
 use crate::portfolio::holdings::HoldingsServiceTrait;
+use crate::portfolio::performance::is_external_transfer;
 use crate::portfolio::valuation::ValuationServiceTrait;
 use crate::quotes::QuoteServiceTrait;
 use crate::taxonomies::TaxonomyServiceTrait;
@@ -469,8 +470,8 @@ impl HealthService {
             })
             .collect();
 
-        // Detect invalid / incomplete transfer groups across all activities so the
-        // Health Center can surface them (they otherwise distort returns silently).
+        // Detect invalid, incomplete, or unreviewed transfer flows across all
+        // activities so the Health Center can surface them.
         let invalid_transfer_groups =
             gather_invalid_transfer_groups(activity_service.as_ref(), &account_name_map);
 
@@ -524,7 +525,8 @@ impl HealthService {
 }
 
 /// Loads all activities and resolves transfer groups, returning the ones that
-/// don't form a valid pair (e.g. a transfer with a single recorded leg).
+/// don't form a valid pair, plus posted ungrouped transfers that are not
+/// explicitly marked as external.
 fn gather_invalid_transfer_groups(
     activity_service: &dyn ActivityServiceTrait,
     account_names: &HashMap<String, String>,
@@ -540,15 +542,17 @@ fn gather_invalid_transfer_groups(
         }
     };
 
-    let resolution = TransferPairResolution::from_activities(&activities);
-    if resolution.invalid_groups().is_empty() {
-        return Vec::new();
-    }
+    invalid_transfer_groups_from_activities(&activities, account_names)
+}
 
-    let by_id: HashMap<&str, &crate::activities::Activity> =
-        activities.iter().map(|a| (a.id.as_str(), a)).collect();
+fn invalid_transfer_groups_from_activities(
+    activities: &[Activity],
+    account_names: &HashMap<String, String>,
+) -> Vec<InvalidTransferGroupInfo> {
+    let resolution = TransferPairResolution::from_activities(activities);
+    let by_id: HashMap<&str, &Activity> = activities.iter().map(|a| (a.id.as_str(), a)).collect();
 
-    resolution
+    let mut groups: Vec<InvalidTransferGroupInfo> = resolution
         .invalid_groups()
         .iter()
         .map(|group| {
@@ -556,24 +560,45 @@ fn gather_invalid_transfer_groups(
                 .activity_ids
                 .iter()
                 .filter_map(|id| by_id.get(id.as_str()).copied())
-                .map(|act| TransferLegDetail {
-                    account_id: act.account_id.clone(),
-                    account_name: account_names
-                        .get(&act.account_id)
-                        .cloned()
-                        .unwrap_or_else(|| "Account".to_string()),
-                    activity_type: act.effective_type().to_string(),
-                    amount: act.amount,
-                    currency: act.currency.clone(),
-                    date: act.activity_date.date_naive(),
-                })
+                .map(|act| transfer_leg_detail(act, account_names))
                 .collect();
             InvalidTransferGroupInfo {
                 group_id: group.group_id.clone(),
                 legs,
             }
         })
-        .collect()
+        .collect();
+
+    for activity in activities {
+        if activity.is_posted()
+            && resolution.is_ungrouped_transfer(&activity.id)
+            && !is_external_transfer(activity)
+        {
+            groups.push(InvalidTransferGroupInfo {
+                group_id: format!("ungrouped:{}", activity.id),
+                legs: vec![transfer_leg_detail(activity, account_names)],
+            });
+        }
+    }
+
+    groups
+}
+
+fn transfer_leg_detail(
+    activity: &Activity,
+    account_names: &HashMap<String, String>,
+) -> TransferLegDetail {
+    TransferLegDetail {
+        account_id: activity.account_id.clone(),
+        account_name: account_names
+            .get(&activity.account_id)
+            .cloned()
+            .unwrap_or_else(|| "Account".to_string()),
+        activity_type: activity.effective_type().to_string(),
+        amount: activity.amount,
+        currency: activity.currency.clone(),
+        date: activity.activity_date.date_naive(),
+    }
 }
 
 #[async_trait]
@@ -770,6 +795,12 @@ impl HealthServiceTrait for HealthService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::activities::{
+        ActivityStatus, ACTIVITY_TYPE_TRANSFER_IN, ACTIVITY_TYPE_TRANSFER_OUT,
+    };
+    use chrono::TimeZone;
+    use rust_decimal_macros::dec;
+    use serde_json::json;
     use std::collections::HashMap;
 
     /// Mock dismissal store for testing.
@@ -813,6 +844,113 @@ mod tests {
             self.dismissals.write().await.clear();
             Ok(())
         }
+    }
+
+    fn transfer_activity(
+        id: &str,
+        account_id: &str,
+        activity_type: &str,
+        source_group_id: Option<&str>,
+        is_external: bool,
+        status: ActivityStatus,
+    ) -> Activity {
+        let now = Utc.with_ymd_and_hms(2026, 6, 8, 12, 0, 0).unwrap();
+        Activity {
+            id: id.to_string(),
+            account_id: account_id.to_string(),
+            asset_id: None,
+            activity_type: activity_type.to_string(),
+            activity_type_override: None,
+            source_type: None,
+            subtype: None,
+            status,
+            activity_date: now,
+            settlement_date: None,
+            quantity: None,
+            unit_price: None,
+            amount: Some(dec!(100)),
+            fee: None,
+            currency: "CAD".to_string(),
+            fx_rate: None,
+            notes: None,
+            metadata: is_external.then(|| json!({ "flow": { "is_external": true } })),
+            source_system: Some("CSV".to_string()),
+            source_record_id: None,
+            source_group_id: source_group_id.map(str::to_string),
+            idempotency_key: None,
+            import_run_id: None,
+            is_user_modified: false,
+            needs_review: false,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn ungrouped_non_external_transfer_is_reported_to_health_center() {
+        let account_names = HashMap::from([("acc_tfsa".to_string(), "TFSA".to_string())]);
+        let activities = vec![transfer_activity(
+            "transfer-in-1",
+            "acc_tfsa",
+            ACTIVITY_TYPE_TRANSFER_IN,
+            None,
+            false,
+            ActivityStatus::Posted,
+        )];
+
+        let groups = invalid_transfer_groups_from_activities(&activities, &account_names);
+
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].group_id, "ungrouped:transfer-in-1");
+        assert_eq!(groups[0].legs.len(), 1);
+        assert_eq!(groups[0].legs[0].account_name, "TFSA");
+        assert_eq!(groups[0].legs[0].activity_type, ACTIVITY_TYPE_TRANSFER_IN);
+    }
+
+    #[test]
+    fn explicit_external_pending_and_valid_grouped_transfers_are_not_reported() {
+        let account_names = HashMap::from([
+            ("acc_cash".to_string(), "Cash".to_string()),
+            ("acc_tfsa".to_string(), "TFSA".to_string()),
+        ]);
+        let activities = vec![
+            transfer_activity(
+                "external-transfer",
+                "acc_tfsa",
+                ACTIVITY_TYPE_TRANSFER_IN,
+                None,
+                true,
+                ActivityStatus::Posted,
+            ),
+            transfer_activity(
+                "pending-transfer",
+                "acc_tfsa",
+                ACTIVITY_TYPE_TRANSFER_IN,
+                None,
+                false,
+                ActivityStatus::Pending,
+            ),
+            transfer_activity(
+                "paired-out",
+                "acc_cash",
+                ACTIVITY_TYPE_TRANSFER_OUT,
+                Some("transfer-group-1"),
+                false,
+                ActivityStatus::Posted,
+            ),
+            transfer_activity(
+                "paired-in",
+                "acc_tfsa",
+                ACTIVITY_TYPE_TRANSFER_IN,
+                Some("transfer-group-1"),
+                false,
+                ActivityStatus::Posted,
+            ),
+        ];
+
+        let groups = invalid_transfer_groups_from_activities(&activities, &account_names);
+
+        assert!(groups.is_empty());
     }
 
     #[tokio::test]

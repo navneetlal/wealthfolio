@@ -115,6 +115,10 @@ pub struct Holding {
     pub realized_gain_pct: Option<Decimal>,
     pub total_gain: Option<MonetaryValue>,
     pub total_gain_pct: Option<Decimal>,
+    pub income: Option<MonetaryValue>,
+    pub total_return: Option<MonetaryValue>,
+    pub total_return_pct: Option<Decimal>,
+    pub return_basis: Option<MonetaryValue>,
 
     // Daily performance
     pub day_change: Option<MonetaryValue>,

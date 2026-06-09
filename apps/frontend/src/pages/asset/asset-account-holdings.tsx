@@ -147,7 +147,7 @@ export function AssetAccountHoldings({ assetId, baseCurrency }: AssetAccountHold
             <TableHead className="text-right">Shares</TableHead>
             <TableHead className="text-right">Market Value</TableHead>
             <TableHead className="text-right">Cost Basis</TableHead>
-            <TableHead className="text-right">Gain/Loss</TableHead>
+            <TableHead className="text-right">Total P&L</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>

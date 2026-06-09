@@ -153,10 +153,12 @@ fn calculate_cost_basis_base(
         let position_currency = normalize_currency_code(&position.currency);
 
         if position.lots.is_empty() {
-            warn!(
-                "Position {} has no materialized lots on {}. Falling back to valuation-date FX for cost basis.",
-                position.asset_id, target_date
-            );
+            if position_currency != base_currency {
+                warn!(
+                    "Position {} has no materialized lots on {}. Falling back to valuation-date FX for cost basis.",
+                    position.asset_id, target_date
+                );
+            }
             let rate = get_rate_from_map(
                 fx_rates_today,
                 position_currency,

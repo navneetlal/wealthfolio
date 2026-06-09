@@ -6,14 +6,14 @@ Overview
 
 Run locally (Rust only)
 - From the repo root:
-  - `cargo run --manifest-path src-server/Cargo.toml`
+  - `cargo run --manifest-path apps/server/Cargo.toml`
 
 Docker image
 - Pull the latest published server image with `docker pull wealthfolio/wealthfolio:latest`.
 - Use that tag (or your locally built image) in the Docker run examples inside the root `README.md`.
 
 Key environment variables
-- `WF_LISTEN_ADDR`: Bind address, default `127.0.0.1:8080`.
+- `WF_LISTEN_ADDR`: Bind address, default `0.0.0.0:8088`.
 - `WF_DB_PATH`: Path to the SQLite database file (or a directory; if a directory is provided, `app.db` is used inside it). Example: `./db/app.db`.
 - `WF_CORS_ALLOW_ORIGINS`: Comma-separated list of allowed origins for CORS. Example: `http://localhost:1420`.
 - `WF_REQUEST_TIMEOUT_MS`: Request timeout in milliseconds. Default `30000`.
@@ -32,7 +32,9 @@ Key environment variables
   Use `printf` instead of `echo -n` to avoid hidden newline issues.
   For Docker Compose `.env`/`--env-file`, single-quote the value or double every `$`;
   for YAML inline values, double every `$` in the hash (`$$argon2id$$...`).
-  When unset, authentication is disabled.
+  When unset, authentication is not configured. The server refuses to start on non-loopback
+  addresses without authentication unless `WF_AUTH_REQUIRED=false` is set; for local no-auth use
+  `WF_LISTEN_ADDR=127.0.0.1:8088`.
 - `WF_AUTH_TOKEN_TTL_MINUTES`: Optional JWT access token lifetime (minutes). Defaults to `60`.
 - `WF_SECRET_FILE`: Optional override for where encrypted secrets are stored. Defaults to `<data-root>/secrets.json`.
 

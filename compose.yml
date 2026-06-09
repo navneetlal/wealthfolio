@@ -1,18 +1,18 @@
 # Wealthfolio - Production Docker Compose
 #
-# Usage: docker compose up -d
-# Dev overlay: docker compose -f compose.yml -f compose.dev.yml up
+# Usage: docker compose --env-file .env.docker up -d
+# Reverse proxy overlay: docker compose --env-file .env.docker -f compose.yml -f compose.proxy.yml up -d
+# Dev overlay: docker compose --env-file .env.docker -f compose.yml -f compose.dev.yml up
 #
-# Works with any reverse proxy (Coolify, Nginx, Caddy, Traefik).
-# Uses expose (not ports) — the proxy handles external traffic.
+# Publishes port 8088 for direct browser access.
 
 services:
   wealthfolio:
     image: wealthfolio/wealthfolio:latest
     container_name: wealthfolio
     restart: unless-stopped
-    expose:
-      - "8088"
+    ports:
+      - "${WF_PORT:-8088}:8088"
     volumes:
       - wealthfolio-data:/data
     environment:
@@ -41,7 +41,7 @@ services:
       # WF_AUTH_REQUIRED: "true"
 
       # Required when auth is enabled — set to your app's origin, e.g. https://wealthfolio.example.com
-      WF_CORS_ALLOW_ORIGINS: "${WF_CORS_ALLOW_ORIGINS}"
+      WF_CORS_ALLOW_ORIGINS: "${WF_CORS_ALLOW_ORIGINS:-}"
       WF_REQUEST_TIMEOUT_MS: "${WF_REQUEST_TIMEOUT_MS:-30000}"
     healthcheck:
       test:

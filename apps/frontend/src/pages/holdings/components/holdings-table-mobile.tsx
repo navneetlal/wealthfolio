@@ -13,6 +13,8 @@ import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { HoldingsMobileFilterSheet } from "./holdings-mobile-filter-sheet";
 
+type PerformanceMode = "daily" | "pnl" | "return";
+
 interface HoldingsTableMobileProps {
   holdings: Holding[];
   isLoading: boolean;
@@ -27,8 +29,8 @@ interface HoldingsTableMobileProps {
   showFilterButton?: boolean;
   sortBy?: "symbol" | "marketValue";
   setSortBy?: (value: "symbol" | "marketValue") => void;
-  showTotalReturn?: boolean;
-  setShowTotalReturn?: (value: boolean) => void;
+  performanceMode?: PerformanceMode;
+  setPerformanceMode?: (value: PerformanceMode) => void;
   typeOptions?: { value: string; label: string }[];
 }
 
@@ -46,8 +48,8 @@ export const HoldingsTableMobile = ({
   showFilterButton = true,
   sortBy: controlledSortBy,
   setSortBy: controlledSetSortBy,
-  showTotalReturn: controlledShowTotalReturn,
-  setShowTotalReturn: controlledSetShowTotalReturn,
+  performanceMode: controlledPerformanceMode,
+  setPerformanceMode: controlledSetPerformanceMode,
   typeOptions,
 }: HoldingsTableMobileProps) => {
   const { isBalanceHidden } = useBalancePrivacy();
@@ -57,12 +59,12 @@ export const HoldingsTableMobile = ({
 
   // Internal state for uncontrolled mode
   const [internalSortBy, setInternalSortBy] = useState<"symbol" | "marketValue">("marketValue");
-  const [internalShowTotalReturn, setInternalShowTotalReturn] = useState(true);
+  const [internalPerformanceMode, setInternalPerformanceMode] = useState<PerformanceMode>("pnl");
 
   const sortBy = controlledSortBy ?? internalSortBy;
   const setSortBy = controlledSetSortBy ?? setInternalSortBy;
-  const showTotalReturn = controlledShowTotalReturn ?? internalShowTotalReturn;
-  const setShowTotalReturn = controlledSetShowTotalReturn ?? setInternalShowTotalReturn;
+  const performanceMode = controlledPerformanceMode ?? internalPerformanceMode;
+  const setPerformanceMode = controlledSetPerformanceMode ?? setInternalPerformanceMode;
 
   const hasActiveFilters = useMemo(() => {
     const hasAccountScope = showAccountScope && accountFilter.type !== "all";
@@ -210,9 +212,11 @@ export const HoldingsTableMobile = ({
                     <div className="flex items-center justify-end gap-1">
                       <AmountDisplay
                         value={
-                          showTotalReturn
-                            ? (holding.totalGain?.local ?? 0)
-                            : (holding.dayChange?.local ?? 0)
+                          performanceMode === "return"
+                            ? (holding.totalReturn?.local ?? holding.totalGain?.local ?? 0)
+                            : performanceMode === "pnl"
+                              ? (holding.totalGain?.local ?? 0)
+                              : (holding.dayChange?.local ?? 0)
                         }
                         currency={holding.localCurrency}
                         isHidden={isBalanceHidden}
@@ -222,9 +226,11 @@ export const HoldingsTableMobile = ({
                       <Separator orientation="vertical" className="mx-1 h-4" />
                       <GainPercent
                         value={
-                          showTotalReturn
-                            ? (holding.totalGainPct ?? 0)
-                            : (holding.dayChangePct ?? 0)
+                          performanceMode === "return"
+                            ? (holding.totalReturnPct ?? holding.totalGainPct ?? 0)
+                            : performanceMode === "pnl"
+                              ? (holding.totalGainPct ?? 0)
+                              : (holding.dayChangePct ?? 0)
                         }
                         className="text-xs"
                       />
@@ -259,8 +265,8 @@ export const HoldingsTableMobile = ({
         showAccountScope={showAccountScope}
         sortBy={sortBy}
         setSortBy={setSortBy}
-        showTotalReturn={showTotalReturn}
-        setShowTotalReturn={setShowTotalReturn}
+        performanceMode={performanceMode}
+        setPerformanceMode={setPerformanceMode}
         typeOptions={typeOptions}
       />
     </div>

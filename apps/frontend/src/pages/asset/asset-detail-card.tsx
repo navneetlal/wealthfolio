@@ -24,6 +24,8 @@ interface AssetDetail {
   priceReturnPercent: number | null;
   totalPnl: number | null;
   totalPnlPercent: number | null;
+  totalReturn: number | null;
+  totalReturnPercent: number | null;
   currency: string;
   baseCurrency: string;
   quoteCurrency?: string | null;
@@ -73,6 +75,8 @@ const AssetDetailCard: React.FC<AssetDetailProps> = ({ assetData, className }) =
     priceReturnPercent,
     totalPnl,
     totalPnlPercent,
+    totalReturn,
+    totalReturnPercent,
     currency,
     baseCurrency,
     quoteCurrency,
@@ -80,6 +84,10 @@ const AssetDetailCard: React.FC<AssetDetailProps> = ({ assetData, className }) =
     bondSpec,
     optionSpec,
   } = assetData;
+
+  const isOption = optionSpec != null;
+  const quantityLabel = isOption ? "contracts" : "shares";
+  const averageCostLabel = isOption ? "Average premium" : "Average cost";
 
   const renderAmountWithPercent = (amount: number | null, percent: number | null) => {
     if (amount == null) return <span className="text-muted-foreground">N/A</span>;
@@ -102,7 +110,7 @@ const AssetDetailCard: React.FC<AssetDetailProps> = ({ assetData, className }) =
       value: <AmountDisplay value={costBasis} currency={currency} isHidden={isBalanceHidden} />,
     },
     {
-      label: "Average cost",
+      label: averageCostLabel,
       value: <AmountDisplay value={averagePrice} currency={currency} isHidden={isBalanceHidden} />,
     },
     { label: "% of my portfolio", value: formatPercent(portfolioPercent) },
@@ -169,6 +177,11 @@ const AssetDetailCard: React.FC<AssetDetailProps> = ({ assetData, className }) =
       value: renderAmountWithPercent(totalPnl, totalPnlPercent),
       color: amountTone(totalPnl),
     },
+    {
+      label: "Total Return",
+      value: renderAmountWithPercent(totalReturn, totalReturnPercent),
+      color: amountTone(totalReturn),
+    },
   ];
 
   return (
@@ -179,7 +192,7 @@ const AssetDetailCard: React.FC<AssetDetailProps> = ({ assetData, className }) =
             <div>
               <QuantityDisplay value={numShares} isHidden={isBalanceHidden} />
             </div>
-            <div className="text-muted-foreground text-sm font-normal">shares</div>
+            <div className="text-muted-foreground text-sm font-normal">{quantityLabel}</div>
           </div>
           <div>
             <div className="text-xl font-extrabold">

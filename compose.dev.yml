@@ -1,10 +1,10 @@
 # Wealthfolio - Development overrides
 #
-# Usage: docker compose -f compose.yml -f compose.dev.yml up
+# Usage: docker compose --env-file .env.docker -f compose.yml -f compose.dev.yml up
 #
 # Or with .env file:
-#   cp .env.docker.example .env.docker
-#   docker compose -f compose.yml -f compose.dev.yml --env-file .env.docker up
+#   printf 'WF_SECRET_KEY=%s\n' "$(openssl rand -base64 32)" > .env.docker
+#   docker compose --env-file .env.docker -f compose.yml -f compose.dev.yml up
 
 services:
   wealthfolio:
