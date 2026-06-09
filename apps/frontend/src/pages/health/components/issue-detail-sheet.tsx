@@ -134,16 +134,14 @@ export function IssueDetailSheet({
           <p className="text-muted-foreground text-sm leading-relaxed">{issue.message}</p>
         </SheetHeader>
 
-        {/* Scrollable content area */}
-        <div className="flex min-h-0 flex-1 flex-col gap-6">
-          {/* Affected Items List - grows to fill space */}
-          {issue.affectedItems && issue.affectedItems.length > 0 && (
-            <div className="flex min-h-0 flex-1 flex-col gap-3">
-              <h4 className="text-muted-foreground shrink-0 text-xs font-medium uppercase tracking-wide">
-                Affected Items ({issue.affectedItems.length})
-              </h4>
-              <ScrollArea className="min-h-0 flex-1 rounded-md border">
-                <div className="p-1">
+        <ScrollArea className="min-h-0 flex-1">
+          <div className="space-y-6 pr-4">
+            {issue.affectedItems && issue.affectedItems.length > 0 && (
+              <div className="space-y-3">
+                <h4 className="text-muted-foreground text-xs font-medium uppercase tracking-wide">
+                  Affected Items ({issue.affectedItems.length})
+                </h4>
+                <div className="rounded-md border p-1">
                   {issue.affectedItems.map((item) => (
                     <div key={item.id} className="group">
                       {item.route ? (
@@ -174,57 +172,54 @@ export function IssueDetailSheet({
                     </div>
                   ))}
                 </div>
-              </ScrollArea>
-            </div>
-          )}
-
-          {/* Impact Stats - only show if no affected items list */}
-          {(issue.affectedCount > 0 || (issue.affectedMvPct != null && issue.affectedMvPct > 0)) &&
-            !issue.affectedItems && (
-              <div className="space-y-3">
-                <h4 className="text-muted-foreground text-xs font-medium uppercase tracking-wide">
-                  Impact
-                </h4>
-                <div className="grid grid-cols-2 gap-4">
-                  {issue.affectedCount > 0 && (
-                    <div>
-                      <p className="text-2xl font-semibold tabular-nums">{issue.affectedCount}</p>
-                      <p className="text-muted-foreground text-xs">Affected items</p>
-                    </div>
-                  )}
-                  {issue.affectedMvPct != null && issue.affectedMvPct > 0 && (
-                    <div>
-                      <p className="text-2xl font-semibold tabular-nums">
-                        {(issue.affectedMvPct * 100).toFixed(1)}%
-                      </p>
-                      <p className="text-muted-foreground text-xs">Portfolio impact</p>
-                    </div>
-                  )}
-                </div>
               </div>
             )}
 
-          {/* Additional Details */}
-          {issue.details && (
-            <div className="space-y-2">
+            {(issue.affectedCount > 0 ||
+              (issue.affectedMvPct != null && issue.affectedMvPct > 0)) &&
+              !issue.affectedItems && (
+                <div className="space-y-3">
+                  <h4 className="text-muted-foreground text-xs font-medium uppercase tracking-wide">
+                    Impact
+                  </h4>
+                  <div className="grid grid-cols-2 gap-4">
+                    {issue.affectedCount > 0 && (
+                      <div>
+                        <p className="text-2xl font-semibold tabular-nums">{issue.affectedCount}</p>
+                        <p className="text-muted-foreground text-xs">Affected items</p>
+                      </div>
+                    )}
+                    {issue.affectedMvPct != null && issue.affectedMvPct > 0 && (
+                      <div>
+                        <p className="text-2xl font-semibold tabular-nums">
+                          {(issue.affectedMvPct * 100).toFixed(1)}%
+                        </p>
+                        <p className="text-muted-foreground text-xs">Portfolio impact</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+            {issue.details && (
+              <div className="space-y-2">
+                <h4 className="text-muted-foreground text-xs font-medium uppercase tracking-wide">
+                  Details
+                </h4>
+                <p className="text-muted-foreground whitespace-pre-line text-sm">{issue.details}</p>
+              </div>
+            )}
+
+            <div className="space-y-2 border-t pt-6">
               <h4 className="text-muted-foreground text-xs font-medium uppercase tracking-wide">
-                Details
+                About this issue
               </h4>
-              <p className="text-muted-foreground whitespace-pre-line text-sm">{issue.details}</p>
+              <p className="text-muted-foreground text-sm">{categoryConfig.description}</p>
             </div>
-          )}
-        </div>
+          </div>
+        </ScrollArea>
 
-        {/* About this issue - before actions */}
-        <div className="shrink-0 space-y-2 border-t pt-6">
-          <h4 className="text-muted-foreground text-xs font-medium uppercase tracking-wide">
-            About this issue
-          </h4>
-          <p className="text-muted-foreground text-sm">{categoryConfig.description}</p>
-        </div>
-
-        {/* Actions - fixed at bottom */}
-        <div className="mt-6 shrink-0 space-y-2">
+        <div className="shrink-0 space-y-2 border-t pt-4">
           {issue.fixAction && (
             <Button onClick={onFix} disabled={isFixing} className="w-full">
               {isFixing ? (

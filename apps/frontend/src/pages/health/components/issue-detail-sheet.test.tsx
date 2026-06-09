@@ -34,7 +34,11 @@ vi.mock("@wealthfolio/ui", () => ({
     Spinner: () => <span>Spinner</span>,
     Wand2: () => <span>Wand2</span>,
   },
-  ScrollArea: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  ScrollArea: ({ children, className }: { children: React.ReactNode; className?: string }) => (
+    <div data-testid="scroll-area" className={className}>
+      {children}
+    </div>
+  ),
   Sheet: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   SheetContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   SheetHeader: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
@@ -56,6 +60,8 @@ const baseIssue: HealthIssue = {
   },
 };
 
+const noop = () => undefined;
+
 function renderIssueSheet(issue: HealthIssue) {
   render(
     <MemoryRouter initialEntries={["/health"]}>
@@ -66,9 +72,9 @@ function renderIssueSheet(issue: HealthIssue) {
             <IssueDetailSheet
               issue={issue}
               open={true}
-              onOpenChange={() => {}}
-              onDismiss={() => {}}
-              onFix={() => {}}
+              onOpenChange={noop}
+              onDismiss={noop}
+              onFix={noop}
               isDismissing={false}
               isFixing={false}
             />
@@ -95,5 +101,33 @@ describe("IssueDetailSheet", () => {
     await user.click(screen.getByRole("link", { name: /Open General Settings/i }));
 
     expect(screen.getByText("General Settings Page")).toBeInTheDocument();
+  });
+
+  it("keeps long issue details inside the scrollable body", () => {
+    renderIssueSheet({
+      ...baseIssue,
+      category: "DATA_CONSISTENCY",
+      title: "9 incomplete transfers detected",
+      message: "A transfer is unpaired or missing its matching leg.",
+      affectedCount: 9,
+      affectedItems: Array.from({ length: 9 }, (_, index) => ({
+        id: `transfer-${index}`,
+        name: `Incomplete transfer ${index + 1}`,
+      })),
+      details: Array.from(
+        { length: 9 },
+        (_, index) =>
+          `Incomplete transfer ${index + 1}\nThis transfer was treated as external; pair it or mark it external if intended.`,
+      ).join("\n\n"),
+    });
+
+    const scrollArea = screen.getByTestId("scroll-area");
+
+    expect(scrollArea).toHaveClass("min-h-0", "flex-1");
+    expect(scrollArea).toContainElement(screen.getByText("Details"));
+    expect(scrollArea).toContainElement(screen.getByText("About this issue"));
+    expect(scrollArea).not.toContainElement(
+      screen.getByRole("link", { name: /Open General Settings/i }),
+    );
   });
 });
