@@ -14,6 +14,7 @@ use rig::{
 
 use crate::env::AiEnvironment;
 use crate::error::AiError;
+use crate::provider_urls::ensure_openai_v1_base_url;
 use crate::providers::ProviderService;
 use std::sync::Arc;
 
@@ -145,7 +146,8 @@ Title:",
                 let key = api_key.ok_or_else(|| AiError::MissingApiKey(provider_id.to_string()))?;
                 let mut builder = groq::Client::<HttpClient>::builder().api_key(&key);
                 if let Some(url) = provider_url {
-                    builder = builder.base_url(&url);
+                    let normalized = ensure_openai_v1_base_url(&url);
+                    builder = builder.base_url(&normalized);
                 }
                 let client = builder
                     .build()
@@ -176,7 +178,8 @@ Title:",
                 let key = api_key.ok_or_else(|| AiError::MissingApiKey(provider_id.to_string()))?;
                 let mut builder = openrouter::Client::<HttpClient>::builder().api_key(&key);
                 if let Some(url) = provider_url {
-                    builder = builder.base_url(&url);
+                    let normalized = ensure_openai_v1_base_url(&url);
+                    builder = builder.base_url(&normalized);
                 }
                 let client = builder
                     .build()
@@ -191,9 +194,10 @@ Title:",
             _ => {
                 // Default to OpenAI-compatible
                 let key = api_key.ok_or_else(|| AiError::MissingApiKey(provider_id.to_string()))?;
-                let mut builder = openai::Client::<HttpClient>::builder().api_key(&key);
+                let mut builder = openai::CompletionsClient::<HttpClient>::builder().api_key(&key);
                 if let Some(url) = provider_url {
-                    builder = builder.base_url(&url);
+                    let normalized = ensure_openai_v1_base_url(&url);
+                    builder = builder.base_url(&normalized);
                 }
                 let client = builder
                     .build()

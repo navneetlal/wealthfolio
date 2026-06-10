@@ -13,6 +13,7 @@ use rig::{
 use std::time::Duration;
 
 use crate::error::AiError;
+use crate::provider_urls::ensure_openai_v1_base_url;
 
 pub(super) fn create_anthropic_client(
     api_key: Option<String>,
@@ -52,7 +53,8 @@ pub(super) fn create_groq_client(
     let key = api_key.ok_or_else(|| AiError::MissingApiKey(provider_id.to_string()))?;
     let mut builder = groq::Client::builder().api_key(&key);
     if let Some(url) = provider_url {
-        builder = builder.base_url(&url);
+        let normalized = ensure_openai_v1_base_url(&url);
+        builder = builder.base_url(&normalized);
     }
     builder
         .build()
@@ -70,12 +72,7 @@ pub(super) fn create_openai_client(
     let key = api_key.ok_or_else(|| AiError::MissingApiKey(provider_id.to_string()))?;
     let mut builder = openai::CompletionsClient::builder().api_key(&key);
     if let Some(url) = provider_url {
-        let base = url.trim_end_matches('/');
-        let normalized = if base.ends_with("/v1") {
-            base.to_string()
-        } else {
-            format!("{}/v1", base)
-        };
+        let normalized = ensure_openai_v1_base_url(&url);
         builder = builder.base_url(&normalized);
     }
     builder
@@ -91,7 +88,8 @@ pub(super) fn create_openrouter_client(
     let key = api_key.ok_or_else(|| AiError::MissingApiKey(provider_id.to_string()))?;
     let mut builder = openrouter::Client::builder().api_key(&key);
     if let Some(url) = provider_url {
-        builder = builder.base_url(&url);
+        let normalized = ensure_openai_v1_base_url(&url);
+        builder = builder.base_url(&normalized);
     }
     builder
         .build()
@@ -230,47 +228,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_openai_base_url_normalization() {
-        // Both forms should produce the same /v1-terminated URL for rig
-        let cases = [
-            ("http://localhost:8080", "http://localhost:8080/v1"),
-            ("http://localhost:8080/", "http://localhost:8080/v1"),
-            ("http://localhost:8080/v1", "http://localhost:8080/v1"),
-            ("http://localhost:8080/v1/", "http://localhost:8080/v1"),
-            ("https://api.openai.com", "https://api.openai.com/v1"),
-        ];
-        for (input, expected) in cases {
-            let base = input.trim_end_matches('/');
-            let normalized = if base.ends_with("/v1") {
-                base.to_string()
-            } else {
-                format!("{}/v1", base)
-            };
-            assert_eq!(normalized, expected, "input: {}", input);
-        }
-    }
+    fn test_openai_compatible_clients_normalize_base_url() {
+        let openai = create_openai_client(
+            Some("test-key".to_string()),
+            "openai",
+            Some("http://localhost:8080/".to_string()),
+        )
+        .expect("openai client");
+        assert_eq!(openai.base_url(), "http://localhost:8080/v1");
 
-    #[test]
-    fn test_list_models_url_normalization() {
-        // Both forms should produce the same /v1/models URL for model listing
-        let cases = [
-            ("http://localhost:8080", "http://localhost:8080/v1/models"),
-            ("http://localhost:8080/", "http://localhost:8080/v1/models"),
-            (
-                "http://localhost:8080/v1",
-                "http://localhost:8080/v1/models",
-            ),
-            (
-                "http://localhost:8080/v1/",
-                "http://localhost:8080/v1/models",
-            ),
-        ];
-        for (input, expected) in cases {
-            let base = input.trim_end_matches('/');
-            let base = base.strip_suffix("/v1").unwrap_or(base);
-            let url = format!("{}/v1/models", base);
-            assert_eq!(url, expected, "input: {}", input);
-        }
+        let groq = create_groq_client(
+            Some("test-key".to_string()),
+            "groq",
+            Some("https://api.groq.com/openai".to_string()),
+        )
+        .expect("groq client");
+        assert_eq!(groq.base_url(), "https://api.groq.com/openai/v1");
+
+        let openrouter = create_openrouter_client(
+            Some("test-key".to_string()),
+            "openrouter",
+            Some("https://openrouter.ai/api/v1/".to_string()),
+        )
+        .expect("openrouter client");
+        assert_eq!(openrouter.base_url(), "https://openrouter.ai/api/v1");
     }
 
     #[test]

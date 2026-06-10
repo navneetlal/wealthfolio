@@ -71,6 +71,7 @@ pub mod prompt_template;
 pub mod prompt_template_service;
 pub mod provider_model;
 pub mod provider_service;
+mod provider_urls;
 pub mod providers;
 pub mod stream_hook;
 pub mod title_generator;
