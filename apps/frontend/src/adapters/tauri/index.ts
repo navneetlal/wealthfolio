@@ -196,6 +196,7 @@ export {
   listenBrokerSyncError,
   listenNavigateToRoute,
   listenDeepLink,
+  getCurrentDeepLinks,
 } from "./events";
 
 // File Dialogs (Tauri file dialogs)

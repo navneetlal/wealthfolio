@@ -4,6 +4,7 @@ import type {
   UnlistenFn as TauriUnlistenFn,
 } from "@tauri-apps/api/event";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 
 import type { EventCallback, UnlistenFn } from "../types";
 
@@ -24,6 +25,10 @@ const adaptUnlisten = (unlisten: TauriUnlistenFn): UnlistenFn => {
       // Listener was never fully registered or already removed — safe to ignore.
     }
   };
+};
+
+const callDeepLinkHandler = <T>(handler: EventCallback<T>, url: string) => {
+  handler({ event: "deep-link-received", payload: url as T, id: 0 });
 };
 
 export const listenFileDropHover = async <T>(handler: EventCallback<T>): Promise<UnlistenFn> => {
@@ -104,7 +109,30 @@ export async function listenNavigateToRoute<T>(handler: EventCallback<T>): Promi
   return adaptUnlisten(unlisten);
 }
 
+export const getCurrentDeepLinks = async (): Promise<string[]> => {
+  return (await getCurrent()) ?? [];
+};
+
 export const listenDeepLink = async <T>(handler: EventCallback<T>): Promise<UnlistenFn> => {
-  const unlisten = await listen<T>("deep-link-received", adaptCallback(handler));
-  return adaptUnlisten(unlisten);
+  const unlistenFns: UnlistenFn[] = [];
+
+  try {
+    const unlisten = await onOpenUrl((urls) => {
+      for (const url of urls) {
+        callDeepLinkHandler(handler, url);
+      }
+    });
+    unlistenFns.push(adaptUnlisten(unlisten));
+  } catch {
+    // Fall back to the app-level bridge below if the plugin API is unavailable.
+  }
+
+  const bridgeUnlisten = await listen<T>("deep-link-received", adaptCallback(handler));
+  unlistenFns.push(adaptUnlisten(bridgeUnlisten));
+
+  return async () => {
+    for (const unlisten of unlistenFns) {
+      await unlisten();
+    }
+  };
 };

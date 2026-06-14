@@ -1,5 +1,6 @@
 import {
   deleteSecret,
+  getCurrentDeepLinks,
   isDesktop,
   listenDeepLink,
   logger,
@@ -24,6 +25,7 @@ import { authenticate as authenticateWithASWebAuth } from "tauri-plugin-web-auth
 import { clearSyncSession, restoreSyncSession, storeSyncSession } from "../services/auth-service";
 import { getUserInfo } from "../services/broker-service";
 import type { UserInfo } from "../types";
+import { parseAuthCallbackUrl } from "../lib/auth-callback";
 
 // Auth configuration - these are public/publishable keys (safe for client-side)
 // Can be overridden via environment variables: CONNECT_AUTH_URL and CONNECT_AUTH_PUBLISHABLE_KEY
@@ -50,43 +52,6 @@ const getWebRedirectUrl = () => {
 const HOSTED_OAUTH_CALLBACK_URL =
   (import.meta.env.CONNECT_OAUTH_CALLBACK_URL as string) ||
   "https://connect.wealthfolio.app/deeplink";
-
-type AuthCallbackPayload = { type: "code"; code: string } | { type: "error"; message: string };
-
-function parseAuthCallbackUrl(url: string): AuthCallbackPayload | null {
-  try {
-    const urlObj = new URL(url);
-    const hashParams = new URLSearchParams(urlObj.hash.substring(1));
-
-    const error =
-      urlObj.searchParams.get("error_description") ??
-      urlObj.searchParams.get("error") ??
-      hashParams.get("error_description") ??
-      hashParams.get("error");
-    if (error) {
-      return { type: "error", message: error };
-    }
-
-    const code = urlObj.searchParams.get("code");
-    if (code) {
-      return { type: "code", code };
-    }
-
-    const hasAccessToken =
-      hashParams.has("access_token") || urlObj.searchParams.has("access_token") || false;
-    if (hasAccessToken) {
-      return {
-        type: "error",
-        message:
-          "Unexpected token callback (access_token). This app expects Auth Code + PKCE; ensure Supabase is configured for PKCE and your hosted callback forwards the ?code=... parameter.",
-      };
-    }
-
-    return null;
-  } catch {
-    return null;
-  }
-}
 
 interface WealthfolioConnectContextValue {
   isEnabled: boolean;
@@ -226,6 +191,7 @@ function EnabledWealthfolioConnectProvider({ children }: { children: ReactNode }
   const [error, setError] = useState<string | null>(null);
 
   const supabaseRef = useRef<SupabaseClient | null>(null);
+  const processedAuthCallbacksRef = useRef<Set<string>>(new Set());
 
   // Initialize Supabase client
   supabaseRef.current ??= createSupabaseClient();
@@ -280,6 +246,14 @@ function EnabledWealthfolioConnectProvider({ children }: { children: ReactNode }
         logger.error("Failed to parse auth callback URL - no payload");
         return;
       }
+
+      const callbackKey =
+        payload.type === "code" ? `code:${payload.code}` : `error:${payload.message}`;
+      if (processedAuthCallbacksRef.current.has(callbackKey)) {
+        logger.debug("Skipping duplicate auth callback");
+        return;
+      }
+      processedAuthCallbacksRef.current.add(callbackKey);
 
       if (payload.type === "error") {
         logger.error(`Auth callback error: ${payload.message}`);
@@ -385,10 +359,12 @@ function EnabledWealthfolioConnectProvider({ children }: { children: ReactNode }
     if (!isDesktop) return;
 
     let unlistenFn: (() => Promise<void>) | undefined;
+    let cancelled = false;
 
     const setupDeepLinkListener = async () => {
       try {
         unlistenFn = await listenDeepLink<string>((event) => {
+          if (cancelled) return;
           const url = event.payload;
 
           const authPayload = parseAuthCallbackUrl(url);
@@ -396,6 +372,15 @@ function EnabledWealthfolioConnectProvider({ children }: { children: ReactNode }
             void handleAuthCallback(url);
           }
         });
+
+        const currentUrls = await getCurrentDeepLinks();
+        if (cancelled) return;
+
+        for (const url of currentUrls) {
+          if (parseAuthCallbackUrl(url)) {
+            void handleAuthCallback(url);
+          }
+        }
       } catch (_err) {
         logger.error("Failed to set up deep link listener.");
       }
@@ -404,6 +389,7 @@ function EnabledWealthfolioConnectProvider({ children }: { children: ReactNode }
     void setupDeepLinkListener();
 
     return () => {
+      cancelled = true;
       void unlistenFn?.();
     };
   }, [handleAuthCallback]);

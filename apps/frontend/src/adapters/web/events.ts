@@ -167,6 +167,10 @@ export const listenNavigateToRoute = <T>(_handler: EventCallback<T>): Promise<Un
   return Promise.resolve(noopUnlisten);
 };
 
+export const getCurrentDeepLinks = (): Promise<string[]> => {
+  return Promise.resolve([]);
+};
+
 export const listenDeepLink = <T>(_handler: EventCallback<T>): Promise<UnlistenFn> => {
   return Promise.resolve(noopUnlisten);
 };

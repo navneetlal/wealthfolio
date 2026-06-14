@@ -26,6 +26,96 @@ use tauri::{AppHandle, Emitter, Manager};
 use events::{emit_app_ready, emit_portfolio_trigger_recalculate, PortfolioRequestPayload};
 use tauri_plugin_deep_link::DeepLinkExt;
 
+#[cfg(target_os = "linux")]
+const WEALTHFOLIO_DESKTOP_FILE: &str = "Wealthfolio.desktop";
+#[cfg(target_os = "linux")]
+const WEALTHFOLIO_SCHEME_HANDLER: &str = "x-scheme-handler/wealthfolio";
+
+#[cfg(target_os = "linux")]
+fn linux_default_scheme_handler() -> std::io::Result<Option<String>> {
+    let output = std::process::Command::new("xdg-mime")
+        .args(["query", "default", WEALTHFOLIO_SCHEME_HANDLER])
+        .output()?;
+
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    let handler = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok((!handler.is_empty()).then_some(handler))
+}
+
+#[cfg(target_os = "linux")]
+fn linux_set_default_scheme_handler(desktop_file: &str) -> std::io::Result<bool> {
+    let status = std::process::Command::new("xdg-mime")
+        .args(["default", desktop_file, WEALTHFOLIO_SCHEME_HANDLER])
+        .status()?;
+
+    Ok(status.success())
+}
+
+#[cfg(target_os = "linux")]
+fn linux_data_dirs() -> Vec<std::path::PathBuf> {
+    let mut dirs = Vec::new();
+
+    if let Some(data_home) = std::env::var_os("XDG_DATA_HOME") {
+        dirs.push(std::path::PathBuf::from(data_home));
+    } else if let Some(home) = std::env::var_os("HOME") {
+        dirs.push(std::path::PathBuf::from(home).join(".local/share"));
+    }
+
+    let data_dirs =
+        std::env::var("XDG_DATA_DIRS").unwrap_or_else(|_| "/usr/local/share:/usr/share".into());
+
+    dirs.extend(
+        data_dirs
+            .split(':')
+            .filter(|dir| !dir.is_empty())
+            .map(std::path::PathBuf::from),
+    );
+
+    dirs
+}
+
+#[cfg(target_os = "linux")]
+fn linux_desktop_file_exists(desktop_file: &str) -> bool {
+    linux_data_dirs()
+        .into_iter()
+        .any(|dir| dir.join("applications").join(desktop_file).is_file())
+}
+
+#[cfg(target_os = "linux")]
+fn ensure_linux_deep_link_registration<R: tauri::Runtime>(app: &tauri::App<R>) {
+    let packaged_handler_exists = linux_desktop_file_exists(WEALTHFOLIO_DESKTOP_FILE);
+
+    if packaged_handler_exists {
+        match linux_default_scheme_handler() {
+            Ok(Some(handler)) if handler == WEALTHFOLIO_DESKTOP_FILE => {}
+            Ok(_) => match linux_set_default_scheme_handler(WEALTHFOLIO_DESKTOP_FILE) {
+                Ok(true) => {}
+                Ok(false) => {
+                    log::warn!("Failed to set packaged Wealthfolio deep link handler as default")
+                }
+                Err(err) => {
+                    log::warn!(
+                        "Failed to set packaged Wealthfolio deep link handler: {}",
+                        err
+                    )
+                }
+            },
+            Err(err) => {
+                log::warn!("Failed to check Linux deep link registration: {}", err);
+            }
+        }
+
+        return;
+    }
+
+    if let Err(err) = app.deep_link().register_all() {
+        log::warn!("Failed to register fallback deep link schemes: {}", err);
+    }
+}
+
 fn portfolio_history_backfill_needed(context: &Arc<context::ServiceContext>) -> bool {
     let accounts = match context.account_service().get_non_archived_accounts() {
         Ok(accounts) => accounts,
@@ -387,6 +477,9 @@ pub fn run() {
                     let _ = deep_link_handle.emit("deep-link-received", url.to_string());
                 }
             });
+
+            #[cfg(target_os = "linux")]
+            ensure_linux_deep_link_registration(app);
 
             // Platform-specific setup
             #[cfg(desktop)]

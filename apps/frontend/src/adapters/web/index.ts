@@ -360,6 +360,7 @@ export {
   listenBrokerSyncStart,
   listenDatabaseRestored,
   listenDeepLink,
+  getCurrentDeepLinks,
   listenFileDrop,
   listenFileDropCancelled,
   listenFileDropHover,
