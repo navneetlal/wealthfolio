@@ -53,6 +53,9 @@ num-traits = "0.2"
 async-trait = "0.1"
 futures = "0.3"
 
+# MCP (Model Context Protocol)
+rmcp = { version = "1.7", default-features = false, features = ["server", "transport-streamable-http-server"] }
+
 # Logging
 log = "0.4"
 
@@ -72,3 +75,4 @@ wealthfolio-device-sync = { path = "crates/device-sync" }
 wealthfolio-ai = { path = "crates/ai" }
 wealthfolio-spending = { path = "crates/spending" }
 wealthfolio-agent-tools = { path = "crates/agent-tools" }
+wealthfolio-mcp = { path = "crates/wealthfolio-mcp" }
