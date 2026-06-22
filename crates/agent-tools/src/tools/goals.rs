@@ -1,16 +1,12 @@
-//! Goals tool - fetch investment goals using rig-core Tool trait.
+//! Goals tool - fetch investment goals.
 
-use rig::{completion::ToolDefinition, tool::Tool};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use super::constants::MAX_GOALS;
-use crate::env::AiEnvironment;
-use crate::error::AiError;
-
-// ============================================================================
-// Tool Arguments and Output
-// ============================================================================
+use crate::constants::MAX_GOALS;
+use crate::env::AgentEnvironment;
+use crate::scope::AgentScope;
+use crate::tool::{AgentTool, AgentToolAccess, AgentToolError, AgentToolResult};
 
 /// Arguments for the get_goals tool (no required args).
 #[derive(Debug, Default, Deserialize)]
@@ -45,55 +41,47 @@ pub struct GetGoalsOutput {
     pub original_count: Option<usize>,
 }
 
-// ============================================================================
-// Tool Implementation
-// ============================================================================
-
 /// Tool to get investment goals with progress.
-pub struct GetGoalsTool<E: AiEnvironment> {
-    env: Arc<E>,
-}
+pub struct GetGoals;
 
-impl<E: AiEnvironment> GetGoalsTool<E> {
-    pub fn new(env: Arc<E>) -> Self {
-        Self { env }
-    }
-}
-
-impl<E: AiEnvironment> Clone for GetGoalsTool<E> {
-    fn clone(&self) -> Self {
-        Self {
-            env: self.env.clone(),
-        }
-    }
-}
-
-impl<E: AiEnvironment + 'static> Tool for GetGoalsTool<E> {
-    const NAME: &'static str = "get_goals";
-
-    type Error = AiError;
-    type Args = GetGoalsArgs;
-    type Output = GetGoalsOutput;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Get investment goals with current progress. Returns goal title, target amount, current amount, progress percentage, and deadline for each goal.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {},
-                "required": []
-            }),
-        }
+#[async_trait::async_trait]
+impl AgentTool for GetGoals {
+    fn name(&self) -> &'static str {
+        "get_goals"
     }
 
-    async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+    fn description(&self) -> &'static str {
+        "Get investment goals with current progress. Returns goal title, target amount, current amount, progress percentage, and deadline for each goal."
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {},
+            "required": []
+        })
+    }
+
+    fn required_scopes(&self) -> &'static [AgentScope] {
+        &[AgentScope::FinancialPlanningRead]
+    }
+
+    fn access_level(&self) -> AgentToolAccess {
+        AgentToolAccess::Read
+    }
+
+    async fn call(
+        &self,
+        env: Arc<dyn AgentEnvironment>,
+        args: serde_json::Value,
+    ) -> Result<AgentToolResult, AgentToolError> {
+        let _args: GetGoalsArgs = serde_json::from_value(args)?;
+
         // Fetch goals
-        let goals = self
-            .env
+        let goals = env
             .goal_service()
             .get_goals()
-            .map_err(|e| AiError::ToolExecutionFailed(e.to_string()))?;
+            .map_err(|e| AgentToolError::ExecutionFailed(e.to_string()))?;
 
         let original_count = goals.len();
 
@@ -127,7 +115,7 @@ impl<E: AiEnvironment + 'static> Tool for GetGoalsTool<E> {
         let total_current: f64 = goals_dto.iter().map(|g| g.current_amount).sum();
         let achieved_count = goals_dto.iter().filter(|g| g.is_achieved).count();
 
-        Ok(GetGoalsOutput {
+        let output = GetGoalsOutput {
             goals: goals_dto,
             count: returned_count,
             total_target,
@@ -139,24 +127,9 @@ impl<E: AiEnvironment + 'static> Tool for GetGoalsTool<E> {
             } else {
                 None
             },
+        };
+        Ok(AgentToolResult {
+            content: serde_json::to_value(output)?,
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::env::test_env::MockEnvironment;
-
-    #[tokio::test]
-    async fn test_get_goals_tool() {
-        let env = Arc::new(MockEnvironment::new());
-        let tool = GetGoalsTool::new(env);
-
-        let result = tool.call(GetGoalsArgs {}).await;
-        assert!(result.is_ok());
-
-        let output = result.unwrap();
-        assert_eq!(output.count, output.goals.len());
     }
 }

@@ -1,17 +1,13 @@
-//! Income tool - fetch income summaries (dividends, interest, other income) using rig-core Tool trait.
+//! Income tool - fetch income summaries (dividends, interest, other income).
 
-use rig::{completion::ToolDefinition, tool::Tool};
 use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::env::AiEnvironment;
-use crate::error::AiError;
-
-// ============================================================================
-// Tool Arguments and Output
-// ============================================================================
+use crate::env::AgentEnvironment;
+use crate::scope::AgentScope;
+use crate::tool::{AgentTool, AgentToolAccess, AgentToolError, AgentToolResult};
 
 /// Arguments for the get_income tool.
 #[derive(Debug, Default, Deserialize)]
@@ -53,61 +49,53 @@ pub struct GetIncomeOutput {
     pub period: String,
 }
 
-// ============================================================================
-// Tool Implementation
-// ============================================================================
-
 /// Tool to fetch income summaries (dividends, interest, other income).
-pub struct GetIncomeTool<E: AiEnvironment> {
-    env: Arc<E>,
-}
+pub struct GetIncome;
 
-impl<E: AiEnvironment> GetIncomeTool<E> {
-    pub fn new(env: Arc<E>) -> Self {
-        Self { env }
-    }
-}
-
-impl<E: AiEnvironment> Clone for GetIncomeTool<E> {
-    fn clone(&self) -> Self {
-        Self {
-            env: self.env.clone(),
-        }
-    }
-}
-
-impl<E: AiEnvironment + 'static> Tool for GetIncomeTool<E> {
-    const NAME: &'static str = "get_income";
-
-    type Error = AiError;
-    type Args = GetIncomeArgs;
-    type Output = GetIncomeOutput;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Fetch income summary including dividends, interest, and other income. Returns total income, monthly average, year-over-year growth, breakdown by type, and top income-generating assets.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "period": {
-                        "type": "string",
-                        "enum": ["YTD", "LAST_YEAR", "ALL"],
-                        "description": "Time period for income summary: YTD (year to date), LAST_YEAR, or ALL (all time). Defaults to YTD."
-                    }
-                },
-                "required": []
-            }),
-        }
+#[async_trait::async_trait]
+impl AgentTool for GetIncome {
+    fn name(&self) -> &'static str {
+        "get_income"
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    fn description(&self) -> &'static str {
+        "Fetch income summary including dividends, interest, and other income. Returns total income, monthly average, year-over-year growth, breakdown by type, and top income-generating assets."
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "period": {
+                    "type": "string",
+                    "enum": ["YTD", "LAST_YEAR", "ALL"],
+                    "description": "Time period for income summary: YTD (year to date), LAST_YEAR, or ALL (all time). Defaults to YTD."
+                }
+            },
+            "required": []
+        })
+    }
+
+    fn required_scopes(&self) -> &'static [AgentScope] {
+        &[AgentScope::PortfolioRead]
+    }
+
+    fn access_level(&self) -> AgentToolAccess {
+        AgentToolAccess::Read
+    }
+
+    async fn call(
+        &self,
+        env: Arc<dyn AgentEnvironment>,
+        args: serde_json::Value,
+    ) -> Result<AgentToolResult, AgentToolError> {
+        let args: GetIncomeArgs = serde_json::from_value(args)?;
+
         // Get income summaries from service
-        let summaries = self
-            .env
+        let summaries = env
             .income_service()
             .get_income_summary(None)
-            .map_err(|e| AiError::ToolExecutionFailed(e.to_string()))?;
+            .map_err(|e| AgentToolError::ExecutionFailed(e.to_string()))?;
 
         // Determine which period to return
         let period = args.period.unwrap_or_else(|| "YTD".to_string());
@@ -118,7 +106,7 @@ impl<E: AiEnvironment + 'static> Tool for GetIncomeTool<E> {
             .iter()
             .find(|s| s.period == period_upper)
             .ok_or_else(|| {
-                AiError::ToolExecutionFailed(format!(
+                AgentToolError::ExecutionFailed(format!(
                     "Period '{}' not found in income data",
                     period
                 ))
@@ -161,7 +149,7 @@ impl<E: AiEnvironment + 'static> Tool for GetIncomeTool<E> {
             })
             .collect();
 
-        Ok(GetIncomeOutput {
+        let output = GetIncomeOutput {
             total_income: summary.total_income.to_f64().unwrap_or(0.0),
             currency: summary.currency.clone(),
             monthly_average: summary.monthly_average.to_f64().unwrap_or(0.0),
@@ -170,41 +158,9 @@ impl<E: AiEnvironment + 'static> Tool for GetIncomeTool<E> {
             top_assets,
             by_month,
             period: summary.period.clone(),
+        };
+        Ok(AgentToolResult {
+            content: serde_json::to_value(output)?,
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::env::test_env::MockEnvironment;
-
-    #[tokio::test]
-    async fn test_get_income_tool() {
-        let env = Arc::new(MockEnvironment::new());
-        let tool = GetIncomeTool::new(env);
-
-        let result = tool.call(GetIncomeArgs::default()).await;
-        assert!(result.is_ok());
-
-        let output = result.unwrap();
-        assert_eq!(output.period, "YTD");
-        assert_eq!(output.currency, "USD");
-    }
-
-    #[tokio::test]
-    async fn test_get_income_with_period() {
-        let env = Arc::new(MockEnvironment::new());
-        let tool = GetIncomeTool::new(env);
-
-        let result = tool
-            .call(GetIncomeArgs {
-                period: Some("ALL".to_string()),
-            })
-            .await;
-        assert!(result.is_ok());
-
-        let output = result.unwrap();
-        assert_eq!(output.period, "ALL");
     }
 }

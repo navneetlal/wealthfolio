@@ -1,17 +1,13 @@
-//! Activities tool - search transactions using rig-core Tool trait.
+//! Activities tool - search transactions.
 
-use rig::{completion::ToolDefinition, tool::Tool};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-
-use super::constants::{DEFAULT_PAGE_SIZE, MAX_ACTIVITIES_ROWS};
-use crate::env::AiEnvironment;
-use crate::error::AiError;
 use wealthfolio_core::activities::Sort;
 
-// ============================================================================
-// Tool Arguments and Output
-// ============================================================================
+use crate::constants::{DEFAULT_PAGE_SIZE, MAX_ACTIVITIES_ROWS};
+use crate::env::AgentEnvironment;
+use crate::scope::AgentScope;
+use crate::tool::{AgentTool, AgentToolAccess, AgentToolError, AgentToolResult};
 
 /// Arguments for the search_activities tool.
 #[derive(Debug, Default, Deserialize)]
@@ -66,82 +62,75 @@ pub struct SearchActivitiesOutput {
     pub total_amount: Option<f64>,
 }
 
-// ============================================================================
-// Tool Implementation
-// ============================================================================
-
 /// Tool to search activities/transactions.
-pub struct SearchActivitiesTool<E: AiEnvironment> {
-    env: Arc<E>,
-}
+pub struct SearchActivities;
 
-impl<E: AiEnvironment> SearchActivitiesTool<E> {
-    pub fn new(env: Arc<E>) -> Self {
-        Self { env }
+#[async_trait::async_trait]
+impl AgentTool for SearchActivities {
+    fn name(&self) -> &'static str {
+        "search_activities"
     }
-}
 
-impl<E: AiEnvironment> Clone for SearchActivitiesTool<E> {
-    fn clone(&self) -> Self {
-        Self {
-            env: self.env.clone(),
-        }
+    fn description(&self) -> &'static str {
+        "Search and get investment activities (transactions) such as buys, sells, dividends, deposits, and withdrawals. Supports filtering, date ranges, and pagination. Returns paginated results with totalPages so you can request more pages if needed."
     }
-}
 
-impl<E: AiEnvironment + 'static> Tool for SearchActivitiesTool<E> {
-    const NAME: &'static str = "search_activities";
-
-    type Error = AiError;
-    type Args = SearchActivitiesArgs;
-    type Output = SearchActivitiesOutput;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Search and get investment activities (transactions) such as buys, sells, dividends, deposits, and withdrawals. Supports filtering, date ranges, and pagination. Returns paginated results with totalPages so you can request more pages if needed.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "accountId": {
-                        "type": "string",
-                        "description": "Filter by account ID (optional, all accounts if not provided)"
-                    },
-                    "activityType": {
-                        "type": "string",
-                        "description": "Filter by activity type",
-                        "enum": ["BUY", "SELL", "DIVIDEND", "DEPOSIT", "WITHDRAWAL", "TRANSFER_IN", "TRANSFER_OUT", "INTEREST", "FEE", "SPLIT", "TAX"]
-                    },
-                    "symbol": {
-                        "type": "string",
-                        "description": "Filter by symbol or asset keyword"
-                    },
-                    "dateFrom": {
-                        "type": "string",
-                        "description": "Start date filter in YYYY-MM-DD format (optional)"
-                    },
-                    "dateTo": {
-                        "type": "string",
-                        "description": "End date filter in YYYY-MM-DD format (optional)"
-                    },
-                    "page": {
-                        "type": "integer",
-                        "description": "Page number, 1-based (default: 1)",
-                        "default": 1
-                    },
-                    "pageSize": {
-                        "type": "integer",
-                        "description": "Number of results per page (default: 50, max: 200)",
-                        "default": 50
-                    }
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "accountId": {
+                    "type": "string",
+                    "description": "Filter by account ID (optional, all accounts if not provided)"
                 },
-                "required": []
-            }),
-        }
+                "activityType": {
+                    "type": "string",
+                    "description": "Filter by activity type",
+                    "enum": ["BUY", "SELL", "DIVIDEND", "DEPOSIT", "WITHDRAWAL", "TRANSFER_IN", "TRANSFER_OUT", "INTEREST", "FEE", "SPLIT", "TAX"]
+                },
+                "symbol": {
+                    "type": "string",
+                    "description": "Filter by symbol or asset keyword"
+                },
+                "dateFrom": {
+                    "type": "string",
+                    "description": "Start date filter in YYYY-MM-DD format (optional)"
+                },
+                "dateTo": {
+                    "type": "string",
+                    "description": "End date filter in YYYY-MM-DD format (optional)"
+                },
+                "page": {
+                    "type": "integer",
+                    "description": "Page number, 1-based (default: 1)",
+                    "default": 1
+                },
+                "pageSize": {
+                    "type": "integer",
+                    "description": "Number of results per page (default: 50, max: 200)",
+                    "default": 50
+                }
+            },
+            "required": []
+        })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    fn required_scopes(&self) -> &'static [AgentScope] {
+        &[AgentScope::ActivitiesRead]
+    }
+
+    fn access_level(&self) -> AgentToolAccess {
+        AgentToolAccess::Read
+    }
+
+    async fn call(
+        &self,
+        env: Arc<dyn AgentEnvironment>,
+        args: serde_json::Value,
+    ) -> Result<AgentToolResult, AgentToolError> {
         use chrono::NaiveDate;
+
+        let args: SearchActivitiesArgs = serde_json::from_value(args)?;
 
         // Pagination: external tool API is 1-based, backend search uses 0-based page index
         let page = args.page.unwrap_or(1).max(1);
@@ -160,8 +149,7 @@ impl<E: AiEnvironment + 'static> Tool for SearchActivitiesTool<E> {
 
         // Resolve account filter: if the value isn't a known account ID, try matching by name
         let account_ids = if let Some(ref raw) = account_id {
-            let accounts = self
-                .env
+            let accounts = env
                 .account_service()
                 .get_active_non_archived_accounts()
                 .unwrap_or_default();
@@ -192,16 +180,18 @@ impl<E: AiEnvironment + 'static> Tool for SearchActivitiesTool<E> {
             .date_from
             .filter(|s| !s.is_empty())
             .map(|s| {
-                NaiveDate::parse_from_str(&s, "%Y-%m-%d")
-                    .map_err(|_| AiError::InvalidInput(format!("Invalid dateFrom format: {s}")))
+                NaiveDate::parse_from_str(&s, "%Y-%m-%d").map_err(|_| {
+                    AgentToolError::InvalidInput(format!("Invalid dateFrom format: {s}"))
+                })
             })
             .transpose()?;
         let date_to = args
             .date_to
             .filter(|s| !s.is_empty())
             .map(|s| {
-                NaiveDate::parse_from_str(&s, "%Y-%m-%d")
-                    .map_err(|_| AiError::InvalidInput(format!("Invalid dateTo format: {s}")))
+                NaiveDate::parse_from_str(&s, "%Y-%m-%d").map_err(|_| {
+                    AgentToolError::InvalidInput(format!("Invalid dateTo format: {s}"))
+                })
             })
             .transpose()?;
 
@@ -212,8 +202,7 @@ impl<E: AiEnvironment + 'static> Tool for SearchActivitiesTool<E> {
         };
 
         // Search activities
-        let response = self
-            .env
+        let response = env
             .activity_service()
             .search_activities(
                 backend_page,
@@ -227,7 +216,7 @@ impl<E: AiEnvironment + 'static> Tool for SearchActivitiesTool<E> {
                 date_to,
                 None, // instrument_type_filter
             )
-            .map_err(|e| AiError::ToolExecutionFailed(e.to_string()))?;
+            .map_err(|e| AgentToolError::ExecutionFailed(e.to_string()))?;
 
         let total_row_count = response.meta.total_row_count as usize;
         let total_pages = ((total_row_count as i64) + page_size - 1) / page_size;
@@ -275,7 +264,7 @@ impl<E: AiEnvironment + 'static> Tool for SearchActivitiesTool<E> {
 
         let account_scope = account_id.unwrap_or_else(|| "all".to_string());
 
-        Ok(SearchActivitiesOutput {
+        let output = SearchActivitiesOutput {
             activities,
             count: returned_count,
             total_row_count,
@@ -288,55 +277,9 @@ impl<E: AiEnvironment + 'static> Tool for SearchActivitiesTool<E> {
             } else {
                 None
             },
+        };
+        Ok(AgentToolResult {
+            content: serde_json::to_value(output)?,
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::env::test_env::MockEnvironment;
-
-    #[tokio::test]
-    async fn test_search_activities_tool() {
-        let env = Arc::new(MockEnvironment::new());
-        let tool = SearchActivitiesTool::new(env);
-
-        let result = tool.call(SearchActivitiesArgs::default()).await;
-        assert!(result.is_ok());
-
-        let output = result.unwrap();
-        assert_eq!(output.count, output.activities.len());
-    }
-
-    #[tokio::test]
-    async fn test_search_activities_with_filters() {
-        let env = Arc::new(MockEnvironment::new());
-        let tool = SearchActivitiesTool::new(env);
-
-        let result = tool
-            .call(SearchActivitiesArgs {
-                activity_type: Some("DIVIDEND".to_string()),
-                date_from: Some("2024-01-01".to_string()),
-                page_size: Some(25),
-                ..Default::default()
-            })
-            .await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_search_activities_with_invalid_date() {
-        let env = Arc::new(MockEnvironment::new());
-        let tool = SearchActivitiesTool::new(env);
-
-        let result = tool
-            .call(SearchActivitiesArgs {
-                date_from: Some("2024-13-01".to_string()),
-                ..Default::default()
-            })
-            .await;
-
-        assert!(matches!(result, Err(AiError::InvalidInput(_))));
     }
 }

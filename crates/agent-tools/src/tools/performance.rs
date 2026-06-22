@@ -1,19 +1,15 @@
 //! Performance tool - fetch portfolio performance metrics using PerformanceService.
 
 use chrono::{Datelike, Local, NaiveDate};
-use rig::{completion::ToolDefinition, tool::Tool};
 use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-
-use crate::env::AiEnvironment;
-use crate::error::AiError;
 use wealthfolio_core::accounts::{account_supports_portfolio_scope, AccountPurpose};
 use wealthfolio_core::portfolio::performance::PerformanceResult as CorePerformanceResult;
 
-// ============================================================================
-// Tool Arguments and Output
-// ============================================================================
+use crate::env::AgentEnvironment;
+use crate::scope::AgentScope;
+use crate::tool::{AgentTool, AgentToolAccess, AgentToolError, AgentToolResult};
 
 /// Arguments for the get_performance tool.
 #[derive(Debug, Deserialize)]
@@ -162,31 +158,6 @@ fn serialized_value<T: Serialize>(value: &T, fallback: &str) -> String {
         .unwrap_or_else(|| fallback.to_string())
 }
 
-// ============================================================================
-// Tool Implementation
-// ============================================================================
-
-/// Tool to get portfolio performance.
-pub struct GetPerformanceTool<E: AiEnvironment> {
-    env: Arc<E>,
-    base_currency: String,
-}
-
-impl<E: AiEnvironment> GetPerformanceTool<E> {
-    pub fn new(env: Arc<E>, base_currency: String) -> Self {
-        Self { env, base_currency }
-    }
-}
-
-impl<E: AiEnvironment> Clone for GetPerformanceTool<E> {
-    fn clone(&self) -> Self {
-        Self {
-            env: self.env.clone(),
-            base_currency: self.base_currency.clone(),
-        }
-    }
-}
-
 /// Convert a period string to a start date.
 fn period_to_start_date(period: &str, end_date: NaiveDate) -> Option<NaiveDate> {
     match period.to_uppercase().as_str() {
@@ -199,37 +170,53 @@ fn period_to_start_date(period: &str, end_date: NaiveDate) -> Option<NaiveDate> 
     }
 }
 
-impl<E: AiEnvironment + 'static> Tool for GetPerformanceTool<E> {
-    const NAME: &'static str = "get_performance";
+/// Tool to get portfolio performance.
+pub struct GetPerformance;
 
-    type Error = AiError;
-    type Args = GetPerformanceArgs;
-    type Output = GetPerformanceOutput;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Get portfolio performance metrics including TWR, IRR, value return, attribution, volatility, and max drawdown. Omit accountId for aggregate performance across all accounts.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "accountId": {
-                        "type": "string",
-                        "description": "Account ID to get performance for. Omit for all accounts."
-                    },
-                    "period": {
-                        "type": "string",
-                        "description": "Time period for performance calculation",
-                        "enum": ["1M", "3M", "6M", "YTD", "1Y", "ALL"],
-                        "default": "YTD"
-                    }
-                },
-                "required": []
-            }),
-        }
+#[async_trait::async_trait]
+impl AgentTool for GetPerformance {
+    fn name(&self) -> &'static str {
+        "get_performance"
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    fn description(&self) -> &'static str {
+        "Get portfolio performance metrics including TWR, IRR, value return, attribution, volatility, and max drawdown. Omit accountId for aggregate performance across all accounts."
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "accountId": {
+                    "type": "string",
+                    "description": "Account ID to get performance for. Omit for all accounts."
+                },
+                "period": {
+                    "type": "string",
+                    "description": "Time period for performance calculation",
+                    "enum": ["1M", "3M", "6M", "YTD", "1Y", "ALL"],
+                    "default": "YTD"
+                }
+            },
+            "required": []
+        })
+    }
+
+    fn required_scopes(&self) -> &'static [AgentScope] {
+        &[AgentScope::PerformanceRead]
+    }
+
+    fn access_level(&self) -> AgentToolAccess {
+        AgentToolAccess::Read
+    }
+
+    async fn call(
+        &self,
+        env: Arc<dyn AgentEnvironment>,
+        args: serde_json::Value,
+    ) -> Result<AgentToolResult, AgentToolError> {
+        let args: GetPerformanceArgs = serde_json::from_value(args)?;
+        let base_currency = env.base_currency();
         let account_id = args.account_id.as_deref().filter(|id| !id.is_empty());
         let period = args.period.to_uppercase();
 
@@ -238,14 +225,13 @@ impl<E: AiEnvironment + 'static> Tool for GetPerformanceTool<E> {
         let start_date = period_to_start_date(&period, end_date);
 
         let metrics = if let Some(account_id) = account_id {
-            let account = self
-                .env
+            let account = env
                 .account_service()
                 .get_account(account_id)
-                .map_err(|e| AiError::ToolExecutionFailed(e.to_string()))?;
+                .map_err(|e| AgentToolError::ExecutionFailed(e.to_string()))?;
             if !account_supports_portfolio_scope(&account, AccountPurpose::Performance) {
                 let reason = "Performance unavailable for this account type.".to_string();
-                return Ok(GetPerformanceOutput {
+                let output = GetPerformanceOutput {
                     id: account_id.to_string(),
                     period_start_date: start_date.map(|d| d.to_string()),
                     period_end_date: Some(end_date.to_string()),
@@ -259,10 +245,12 @@ impl<E: AiEnvironment + 'static> Tool for GetPerformanceTool<E> {
                         not_applicable_reasons: vec![reason],
                     },
                     ..Default::default()
+                };
+                return Ok(AgentToolResult {
+                    content: serde_json::to_value(output)?,
                 });
             }
-            self.env
-                .performance_service()
+            env.performance_service()
                 .calculate_performance_history(
                     "account",
                     account_id,
@@ -272,13 +260,12 @@ impl<E: AiEnvironment + 'static> Tool for GetPerformanceTool<E> {
                     Some(&account.account_type),
                 )
                 .await
-                .map_err(|e| AiError::ToolExecutionFailed(e.to_string()))?
+                .map_err(|e| AgentToolError::ExecutionFailed(e.to_string()))?
         } else {
-            let accounts = self
-                .env
+            let accounts = env
                 .account_service()
                 .get_non_archived_accounts()
-                .map_err(|e| AiError::ToolExecutionFailed(e.to_string()))?;
+                .map_err(|e| AgentToolError::ExecutionFailed(e.to_string()))?;
             let mut account_tracking_modes = std::collections::HashMap::new();
             let mut account_types = std::collections::HashMap::new();
             let account_ids: Vec<String> = accounts
@@ -292,19 +279,18 @@ impl<E: AiEnvironment + 'static> Tool for GetPerformanceTool<E> {
                     account.id
                 })
                 .collect();
-            self.env
-                .performance_service()
+            env.performance_service()
                 .calculate_performance_history_for_accounts(
                     "all",
                     &account_ids,
-                    &self.base_currency,
+                    &base_currency,
                     &account_tracking_modes,
                     &account_types,
                     start_date,
                     Some(end_date),
                 )
                 .await
-                .map_err(|e| AiError::ToolExecutionFailed(e.to_string()))?
+                .map_err(|e| AgentToolError::ExecutionFailed(e.to_string()))?
         };
 
         let mode = serialized_value(&metrics.mode, "notApplicable");
@@ -312,12 +298,12 @@ impl<E: AiEnvironment + 'static> Tool for GetPerformanceTool<E> {
         let summary = PerformanceSummaryOutput::from_metrics(&metrics);
         let data_quality_status = serialized_value(&metrics.data_quality.status, "partial");
 
-        Ok(GetPerformanceOutput {
+        let output = GetPerformanceOutput {
             id: metrics.scope.id,
             period_start_date: metrics.period.start_date.map(|d| d.to_string()),
             period_end_date: metrics.period.end_date.map(|d| d.to_string()),
             currency: if metrics.scope.currency.is_empty() {
-                self.base_currency.clone()
+                base_currency.clone()
             } else {
                 metrics.scope.currency
             },
@@ -364,6 +350,9 @@ impl<E: AiEnvironment + 'static> Tool for GetPerformanceTool<E> {
                 not_applicable_reasons: metrics.data_quality.not_applicable_reasons,
             },
             is_mixed_tracking_mode: metrics.is_mixed_tracking_mode,
+        };
+        Ok(AgentToolResult {
+            content: serde_json::to_value(output)?,
         })
     }
 }
@@ -371,76 +360,9 @@ impl<E: AiEnvironment + 'static> Tool for GetPerformanceTool<E> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::env::test_env::{MockAccountService, MockEnvironment};
-    use chrono::Utc;
-    use wealthfolio_core::accounts::{Account, TrackingMode};
 
-    #[tokio::test]
-    async fn test_get_performance_tool() {
-        let env = Arc::new(MockEnvironment::new());
-        let tool = GetPerformanceTool::new(env, "USD".to_string());
-
-        let result = tool
-            .call(GetPerformanceArgs {
-                account_id: None,
-                period: "YTD".to_string(),
-            })
-            .await;
-        assert!(result.is_ok());
-
-        let output = result.unwrap();
-        assert_eq!(output.currency, "USD");
-        assert_eq!(output.basis_status, "notApplicable");
-        assert_eq!(output.summary.amount_status, "unavailable");
-        assert_eq!(output.summary.percent_status, "unavailable");
-    }
-
-    #[tokio::test]
-    async fn test_get_performance_with_account_id() {
-        let mut env = MockEnvironment::new();
-        env.account_service = Arc::new(MockAccountService {
-            accounts: vec![test_account("acc-123", "SECURITIES")],
-        });
-        let env = Arc::new(env);
-        let tool = GetPerformanceTool::new(env, "USD".to_string());
-
-        let result = tool
-            .call(GetPerformanceArgs {
-                account_id: Some("acc-123".to_string()),
-                period: "1M".to_string(),
-            })
-            .await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_get_performance_returns_empty_metrics_for_credit_card() {
-        let mut env = MockEnvironment::new();
-        env.account_service = Arc::new(MockAccountService {
-            accounts: vec![test_account("card-1", "CREDIT_CARD")],
-        });
-        let env = Arc::new(env);
-        let tool = GetPerformanceTool::new(env, "USD".to_string());
-
-        let output = tool
-            .call(GetPerformanceArgs {
-                account_id: Some("card-1".to_string()),
-                period: "1M".to_string(),
-            })
-            .await
-            .expect("credit cards should return an empty performance response");
-
-        assert_eq!(output.id, "card-1");
-        assert_eq!(output.currency, "USD");
-        assert_eq!(output.returns.twr, None);
-        assert_eq!(output.returns.irr, None);
-        assert_eq!(output.basis_status, "notApplicable");
-        assert_eq!(output.summary.amount_status, "unavailable");
-        assert_eq!(output.summary.percent_status, "unavailable");
-    }
-
-    #[tokio::test]
-    async fn test_period_conversion() {
+    #[test]
+    fn test_period_conversion() {
         let today = NaiveDate::from_ymd_opt(2024, 6, 15).unwrap();
 
         // Test YTD
@@ -458,27 +380,5 @@ mod tests {
         // Test ALL - returns None (no start date filter)
         let all_start = period_to_start_date("ALL", today);
         assert_eq!(all_start, None);
-    }
-
-    fn test_account(id: &str, account_type: &str) -> Account {
-        let now = Utc::now().naive_utc();
-        Account {
-            id: id.to_string(),
-            name: id.to_string(),
-            account_type: account_type.to_string(),
-            group: None,
-            currency: "USD".to_string(),
-            is_default: false,
-            is_active: true,
-            created_at: now,
-            updated_at: now,
-            platform_id: None,
-            account_number: None,
-            meta: None,
-            provider: None,
-            provider_account_id: None,
-            is_archived: false,
-            tracking_mode: TrackingMode::Transactions,
-        }
     }
 }

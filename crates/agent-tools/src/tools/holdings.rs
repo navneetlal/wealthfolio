@@ -1,18 +1,14 @@
-//! Holdings tool - fetch portfolio holdings using rig-core Tool trait.
+//! Holdings tool - fetch portfolio holdings.
 
-use rig::{completion::ToolDefinition, tool::Tool};
 use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use wealthfolio_core::accounts::{account_supports_purpose, AccountPurpose};
 
-use super::constants::MAX_HOLDINGS;
-use crate::env::AiEnvironment;
-use crate::error::AiError;
-
-// ============================================================================
-// Tool Arguments and Output
-// ============================================================================
+use crate::constants::MAX_HOLDINGS;
+use crate::env::AgentEnvironment;
+use crate::scope::AgentScope;
+use crate::tool::{AgentTool, AgentToolAccess, AgentToolError, AgentToolResult};
 
 /// Arguments for the get_holdings tool.
 #[derive(Debug, Deserialize)]
@@ -73,87 +69,75 @@ pub struct GetHoldingsOutput {
     pub original_count: Option<usize>,
 }
 
-// ============================================================================
-// Tool Implementation
-// ============================================================================
-
 /// Tool to get portfolio holdings.
-pub struct GetHoldingsTool<E: AiEnvironment> {
-    env: Arc<E>,
-    base_currency: String,
-}
+pub struct GetHoldings;
 
-impl<E: AiEnvironment> GetHoldingsTool<E> {
-    pub fn new(env: Arc<E>, base_currency: String) -> Self {
-        Self { env, base_currency }
+#[async_trait::async_trait]
+impl AgentTool for GetHoldings {
+    fn name(&self) -> &'static str {
+        "get_holdings"
     }
-}
 
-impl<E: AiEnvironment> Clone for GetHoldingsTool<E> {
-    fn clone(&self) -> Self {
-        Self {
-            env: self.env.clone(),
-            base_currency: self.base_currency.clone(),
-        }
+    fn description(&self) -> &'static str {
+        "Get portfolio holdings for an account or all accounts. Returns symbol, quantity, market value, cost basis, and gain/loss for each holding. Omit accountId for aggregate holdings across all accounts. Use viewMode to control display: 'treemap' for visual composition chart with daily performance, 'table' for detailed list, or 'both' to show both views."
     }
-}
 
-impl<E: AiEnvironment + 'static> Tool for GetHoldingsTool<E> {
-    const NAME: &'static str = "get_holdings";
-
-    type Error = AiError;
-    type Args = GetHoldingsArgs;
-    type Output = GetHoldingsOutput;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Get portfolio holdings for an account or all accounts. Returns symbol, quantity, market value, cost basis, and gain/loss for each holding. Omit accountId for aggregate holdings across all accounts. Use viewMode to control display: 'treemap' for visual composition chart with daily performance, 'table' for detailed list, or 'both' to show both views.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "accountId": {
-                        "type": "string",
-                        "description": "Account ID to get holdings for. Omit for all accounts."
-                    },
-                    "viewMode": {
-                        "type": "string",
-                        "enum": ["table", "treemap", "both"],
-                        "description": "Display mode: 'treemap' for composition chart with daily gains (best for 'how is my portfolio today?'), 'table' for detailed list, 'both' for treemap + table",
-                        "default": "treemap"
-                    }
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "accountId": {
+                    "type": "string",
+                    "description": "Account ID to get holdings for. Omit for all accounts."
                 },
-                "required": []
-            }),
-        }
+                "viewMode": {
+                    "type": "string",
+                    "enum": ["table", "treemap", "both"],
+                    "description": "Display mode: 'treemap' for composition chart with daily gains (best for 'how is my portfolio today?'), 'table' for detailed list, 'both' for treemap + table",
+                    "default": "treemap"
+                }
+            },
+            "required": []
+        })
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    fn required_scopes(&self) -> &'static [AgentScope] {
+        &[AgentScope::PortfolioRead]
+    }
+
+    fn access_level(&self) -> AgentToolAccess {
+        AgentToolAccess::Read
+    }
+
+    async fn call(
+        &self,
+        env: Arc<dyn AgentEnvironment>,
+        args: serde_json::Value,
+    ) -> Result<AgentToolResult, AgentToolError> {
         use std::collections::HashMap;
 
+        let args: GetHoldingsArgs = serde_json::from_value(args)?;
+        let base_currency = env.base_currency();
         let account_id = args.account_id.as_deref().filter(|id| !id.is_empty());
 
         let holdings = if let Some(account_id) = account_id {
-            let account = self
-                .env
+            let account = env
                 .account_service()
                 .get_account(account_id)
-                .map_err(|e| AiError::ToolExecutionFailed(e.to_string()))?;
+                .map_err(|e| AgentToolError::ExecutionFailed(e.to_string()))?;
             if !account_supports_purpose(&account.account_type, AccountPurpose::Holdings) {
                 Vec::new()
             } else {
-                self.env
-                    .holdings_service()
-                    .get_holdings(account_id, &self.base_currency)
+                env.holdings_service()
+                    .get_holdings(account_id, &base_currency)
                     .await
-                    .map_err(|e| AiError::ToolExecutionFailed(e.to_string()))?
+                    .map_err(|e| AgentToolError::ExecutionFailed(e.to_string()))?
             }
         } else {
-            let accounts = self
-                .env
+            let accounts = env
                 .account_service()
                 .get_active_non_archived_accounts()
-                .map_err(|e| AiError::ToolExecutionFailed(e.to_string()))?;
+                .map_err(|e| AgentToolError::ExecutionFailed(e.to_string()))?;
             let account_ids: Vec<String> = accounts
                 .into_iter()
                 .filter(|account| {
@@ -161,19 +145,17 @@ impl<E: AiEnvironment + 'static> Tool for GetHoldingsTool<E> {
                 })
                 .map(|account| account.id)
                 .collect();
-            self.env
-                .holdings_service()
-                .get_holdings_for_accounts(&account_ids, &self.base_currency, "all")
+            env.holdings_service()
+                .get_holdings_for_accounts(&account_ids, &base_currency, "all")
                 .await
-                .map_err(|e| AiError::ToolExecutionFailed(e.to_string()))?
+                .map_err(|e| AgentToolError::ExecutionFailed(e.to_string()))?
         };
 
         // Build account_id → name lookup
-        let accounts = self
-            .env
+        let accounts = env
             .account_service()
             .list_accounts(None, None, None)
-            .map_err(|e| AiError::ToolExecutionFailed(e.to_string()))?;
+            .map_err(|e| AgentToolError::ExecutionFailed(e.to_string()))?;
         let account_names: HashMap<String, String> =
             accounts.into_iter().map(|a| (a.id, a.name)).collect();
 
@@ -230,10 +212,10 @@ impl<E: AiEnvironment + 'static> Tool for GetHoldingsTool<E> {
         let total_value: f64 = holdings_dto.iter().map(|h| h.market_value_base).sum();
         let truncated = original_count > returned_count;
 
-        Ok(GetHoldingsOutput {
+        let output = GetHoldingsOutput {
             holdings: holdings_dto,
             total_value,
-            currency: self.base_currency.clone(),
+            currency: base_currency,
             account_scope: account_id.unwrap_or("all").to_string(),
             view_mode: args.view_mode.clone(),
             truncated: if truncated { Some(true) } else { None },
@@ -242,77 +224,9 @@ impl<E: AiEnvironment + 'static> Tool for GetHoldingsTool<E> {
             } else {
                 None
             },
+        };
+        Ok(AgentToolResult {
+            content: serde_json::to_value(output)?,
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::env::test_env::{MockAccountService, MockEnvironment};
-    use chrono::Utc;
-    use wealthfolio_core::accounts::{Account, TrackingMode};
-
-    #[tokio::test]
-    async fn test_get_holdings_tool() {
-        let env = Arc::new(MockEnvironment::new());
-        let tool = GetHoldingsTool::new(env, "USD".to_string());
-
-        let result = tool
-            .call(GetHoldingsArgs {
-                account_id: None,
-                view_mode: "treemap".to_string(),
-            })
-            .await;
-        assert!(result.is_ok());
-
-        let output = result.unwrap();
-        assert_eq!(output.account_scope, "all");
-        assert_eq!(output.currency, "USD");
-        assert_eq!(output.view_mode, "treemap");
-    }
-
-    #[tokio::test]
-    async fn test_get_holdings_with_account_id() {
-        let mut env = MockEnvironment::new();
-        env.account_service = Arc::new(MockAccountService {
-            accounts: vec![test_account("acc-123", "SECURITIES")],
-        });
-        let env = Arc::new(env);
-        let tool = GetHoldingsTool::new(env, "USD".to_string());
-
-        let result = tool
-            .call(GetHoldingsArgs {
-                account_id: Some("acc-123".to_string()),
-                view_mode: "table".to_string(),
-            })
-            .await;
-        assert!(result.is_ok());
-
-        let output = result.unwrap();
-        assert_eq!(output.account_scope, "acc-123");
-        assert_eq!(output.view_mode, "table");
-    }
-
-    fn test_account(id: &str, account_type: &str) -> Account {
-        let now = Utc::now().naive_utc();
-        Account {
-            id: id.to_string(),
-            name: id.to_string(),
-            account_type: account_type.to_string(),
-            group: None,
-            currency: "USD".to_string(),
-            is_default: false,
-            created_at: now,
-            updated_at: now,
-            platform_id: None,
-            account_number: None,
-            meta: None,
-            is_active: true,
-            provider: None,
-            provider_account_id: None,
-            is_archived: false,
-            tracking_mode: TrackingMode::Transactions,
-        }
     }
 }
