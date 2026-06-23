@@ -23,7 +23,7 @@ pub fn validate_new_target(input: &NewAllocationTarget) -> CoreResult<()> {
         return Err(invalid("drift_band_bps must be between 0 and 10000"));
     }
     if let Some(factor) = input.relative_factor_bps {
-        if factor < 0 || factor > 10000 {
+        if !(0..=10000).contains(&factor) {
             return Err(invalid("relative_factor_bps must be between 0 and 10000"));
         }
     }
