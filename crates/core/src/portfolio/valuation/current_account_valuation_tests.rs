@@ -36,7 +36,7 @@ fn account(id: &str, currency: &str) -> Account {
         provider_account_id: None,
         is_archived: false,
         tracking_mode: TrackingMode::Transactions,
-            asset_class_override: None,
+        asset_class_override: None,
     }
 }
 
