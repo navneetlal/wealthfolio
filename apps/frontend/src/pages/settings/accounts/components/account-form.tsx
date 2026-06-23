@@ -1,5 +1,5 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import * as z from "zod";
 
@@ -8,6 +8,7 @@ import { Checkbox } from "@wealthfolio/ui/components/ui/checkbox";
 
 import { newAccountSchema } from "@/lib/schemas";
 import { AccountType } from "@/lib/constants";
+import { useTaxonomy } from "@/hooks/use-taxonomies";
 import {
   CurrencyInput,
   RadioGroup,
@@ -85,6 +86,17 @@ export function AccountForm({ defaultValues, onSuccess = () => undefined }: Acco
   const currentTrackingMode = form.watch("trackingMode");
   const currentAccountType = form.watch("accountType");
   const isCreditCardAccount = currentAccountType === AccountType.CREDIT_CARD;
+  const isCashAccount = currentAccountType === AccountType.CASH;
+
+  const { data: assetClassesTaxonomy } = useTaxonomy(isCashAccount ? "asset_classes" : null);
+  const assetClassOptions = useMemo<ResponsiveSelectOption[]>(() => {
+    const defaultOption: ResponsiveSelectOption = { label: "Cash (default)", value: "__default__" };
+    if (!assetClassesTaxonomy) return [defaultOption];
+    const categories = assetClassesTaxonomy.categories
+      .filter((c) => !c.parentId && c.id !== "CASH")
+      .map((c) => ({ label: c.name, value: c.id }));
+    return [defaultOption, ...categories];
+  }, [assetClassesTaxonomy]);
 
   useEffect(() => {
     if (isCreditCardAccount && currentTrackingMode !== "TRANSACTIONS") {
@@ -320,6 +332,30 @@ export function AccountForm({ defaultValues, onSuccess = () => undefined }: Acco
               </FormItem>
             )}
           />
+
+          {isCashAccount && (
+            <FormField
+              control={form.control}
+              name="assetClassOverride"
+              render={({ field }) => (
+                <FormItem className="flex flex-col">
+                  <FormLabel>Allocation category</FormLabel>
+                  <FormControl>
+                    <ResponsiveSelect
+                      value={field.value ?? "__default__"}
+                      onValueChange={(v) => field.onChange(v === "__default__" ? null : v)}
+                      options={assetClassOptions}
+                      placeholder="Cash (default)"
+                      sheetTitle="Allocation Category"
+                      sheetDescription="Override how this account appears in allocation charts."
+                      triggerClassName="h-11"
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          )}
 
           <FormField
             control={form.control}

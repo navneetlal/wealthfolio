@@ -248,6 +248,8 @@ pub struct Account {
     pub is_archived: bool,
     /// Tracking mode for the account
     pub tracking_mode: TrackingMode,
+    /// Override the default allocation category for cash in this account
+    pub asset_class_override: Option<String>,
 }
 
 /// Input model for creating a new account.
@@ -271,6 +273,7 @@ pub struct NewAccount {
     pub is_archived: bool,
     #[serde(default)]
     pub tracking_mode: TrackingMode,
+    pub asset_class_override: Option<String>,
 }
 
 impl NewAccount {
@@ -314,6 +317,7 @@ pub struct AccountUpdate {
     pub provider_account_id: Option<String>,
     pub is_archived: Option<bool>,
     pub tracking_mode: Option<TrackingMode>,
+    pub asset_class_override: Option<String>,
 }
 
 impl AccountUpdate {

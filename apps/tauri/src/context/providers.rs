@@ -427,10 +427,10 @@ pub async fn initialize_context(
         .with_lot_repository(lots_repository.clone()),
     );
 
-    let allocation_service = Arc::new(AllocationService::new(
-        holdings_service.clone(),
-        taxonomy_service.clone(),
-    ));
+    let allocation_service = Arc::new(
+        AllocationService::new(holdings_service.clone(), taxonomy_service.clone())
+            .with_account_service(account_service.clone()),
+    );
 
     let allocation_target_repository = Arc::new(AllocationTargetRepository::new(
         pool.clone(),

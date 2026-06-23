@@ -29,6 +29,7 @@ export function AccountEditModal({ account, open, onClose }: AccountEditModalPro
     isArchived: account?.isArchived ?? false,
     trackingMode: account?.trackingMode,
     meta: account?.meta,
+    assetClassOverride: account?.assetClassOverride ?? null,
   };
 
   return (

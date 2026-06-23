@@ -1606,6 +1606,7 @@ mod tests {
             provider_account_id: None,
             is_archived: false,
             tracking_mode: crate::accounts::TrackingMode::NotSet,
+            asset_class_override: None,
         }
     }
 
