@@ -311,7 +311,9 @@ mod tests {
     use crate::taxonomies::TaxonomyRepository;
     use diesel::dsl::count_star;
     use tempfile::tempdir;
-    use wealthfolio_core::portfolio::allocation_targets::{RebalanceGoal, ScopeType, TriggerType};
+    use wealthfolio_core::portfolio::allocation_targets::{
+        BandType, RebalanceGoal, ScopeType, TriggerType,
+    };
     use wealthfolio_core::taxonomies::TaxonomyRepositoryTrait;
 
     fn setup_repos() -> (AllocationTargetRepository, TaxonomyRepository) {
@@ -344,6 +346,8 @@ mod tests {
             taxonomy_id: taxonomy_id.to_string(),
             trigger_type: TriggerType::Threshold,
             drift_band_bps: 500,
+            band_type: BandType::Absolute,
+            relative_factor_bps: 2000,
             rebalance_goal: RebalanceGoal::NearestBand,
             min_trade_amount: "0".to_string(),
             whole_shares_only: false,
