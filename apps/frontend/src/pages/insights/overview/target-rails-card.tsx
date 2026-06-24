@@ -78,7 +78,7 @@ export function TargetRailsCard({
       const pp = bps / 100;
       return Number.isInteger(pp) ? pp.toFixed(0) : pp.toFixed(1);
     };
-    return `±${fmt(minBand)}–${fmt(maxBand)} pp`;
+    return `±${fmt(minBand)}–${fmt(maxBand)}%`;
   })();
   const maxScale =
     Math.max(1, ...rows.flatMap((r) => [r.currentBps / 100, r.targetBps / 100])) * 1.08;

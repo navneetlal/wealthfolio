@@ -44,7 +44,7 @@ export function OverviewTab({
     const range =
       minBand === maxBand
         ? formatTolerance(minBand)
-        : `±${(minBand / 100).toFixed(1)}–${(maxBand / 100).toFixed(1)} pp`;
+        : `±${(minBand / 100).toFixed(1)}–${(maxBand / 100).toFixed(1)}%`;
     return `${typeName} · ${range}`;
   })();
 
