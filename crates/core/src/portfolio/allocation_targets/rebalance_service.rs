@@ -103,6 +103,7 @@ impl RebalanceService {
     fn build_candidates(
         contributions: &[HoldingAllocationContribution],
         price_by_asset: &HashMap<String, Decimal>,
+        quantity_by_asset: &HashMap<String, Decimal>,
         whole_shares_only: bool,
     ) -> (Vec<AssetCandidate>, Vec<RebalanceWarning>) {
         // Group contributions by asset_id (instrument ID).
@@ -172,11 +173,12 @@ impl RebalanceService {
                 }
             };
 
-            // Build exposure per share: contribution.value / quantity, excluding __UNKNOWN__.
-            let qty = repr.quantity;
-            if qty <= Decimal::ZERO {
-                continue;
-            }
+            // Build exposure per share: contribution.value / owned quantity,
+            // excluding __UNKNOWN__.
+            let qty = match quantity_by_asset.get(asset_id) {
+                Some(&q) if q > Decimal::ZERO => q,
+                _ => continue,
+            };
             let mut exposure_per_share: HashMap<String, Decimal> = HashMap::new();
             for c in contribs.iter() {
                 if c.category_id == "__UNKNOWN__" {
@@ -237,23 +239,19 @@ impl RebalanceService {
                 _ => continue,
             };
 
-            let repr = contribs[0];
-            let qty = repr.quantity;
-            if qty <= Decimal::ZERO {
-                continue;
-            }
-
             let mut exposure_per_share: HashMap<String, Decimal> = HashMap::new();
             for c in contribs.iter() {
                 if c.category_id == "__UNKNOWN__" {
                     continue;
                 }
-                *exposure_per_share.entry(c.category_id.clone()).or_default() += c.value / qty;
+                *exposure_per_share.entry(c.category_id.clone()).or_default() +=
+                    c.value / qty_owned;
             }
             if exposure_per_share.is_empty() {
                 continue;
             }
 
+            let repr = contribs[0];
             sell_candidates.push(SellCandidate {
                 holding_id: asset_id.to_string(),
                 asset_id: repr.asset_id.clone(),
@@ -382,6 +380,7 @@ impl RebalanceServiceTrait for RebalanceService {
         let (candidates, classification_warnings) = Self::build_candidates(
             &taxonomy_contributions.contributions,
             &price_by_asset,
+            &quantity_by_asset,
             profile.whole_shares_only,
         );
 
@@ -861,6 +860,85 @@ mod tests {
             aggregated_account_id: "agg".to_string(),
             scenario_mode: ScenarioMode::CashFlowOnly,
         }
+    }
+
+    #[test]
+    fn split_classification_single_holding_keeps_weighted_exposure_per_share() {
+        let h = make_holding("asset-a", "AAA", dec!(10), dec!(1000));
+        let c_equity = make_contribution(&h, "equity", dec!(600));
+        let c_bond = make_contribution(&h, "bond", dec!(400));
+        let price_by_asset = HashMap::from([("asset-a".to_string(), dec!(100))]);
+        let quantity_by_asset = HashMap::from([("asset-a".to_string(), dec!(10))]);
+
+        let (candidates, warnings) = RebalanceService::build_candidates(
+            &[c_equity, c_bond],
+            &price_by_asset,
+            &quantity_by_asset,
+            false,
+        );
+
+        assert!(warnings.is_empty());
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(
+            candidates[0].exposure_per_share.get("equity").copied(),
+            Some(dec!(60))
+        );
+        assert_eq!(
+            candidates[0].exposure_per_share.get("bond").copied(),
+            Some(dec!(40))
+        );
+    }
+
+    #[test]
+    fn same_asset_account_rows_use_combined_quantity_for_buy_exposure() {
+        let mut h1 = make_holding("SEC-acc-1-asset-a", "AAA", dec!(5), dec!(500));
+        let mut h2 = make_holding("SEC-acc-2-asset-a", "AAA", dec!(5), dec!(500));
+        h1.account_id = "acc-1".to_string();
+        h2.account_id = "acc-2".to_string();
+        h1.instrument.as_mut().unwrap().id = "asset-a".to_string();
+        h2.instrument.as_mut().unwrap().id = "asset-a".to_string();
+        let c1 = make_contribution(&h1, "equity", dec!(500));
+        let c2 = make_contribution(&h2, "equity", dec!(500));
+        let price_by_asset = HashMap::from([("asset-a".to_string(), dec!(100))]);
+        let quantity_by_asset = HashMap::from([("asset-a".to_string(), dec!(10))]);
+
+        let (candidates, warnings) = RebalanceService::build_candidates(
+            &[c1, c2],
+            &price_by_asset,
+            &quantity_by_asset,
+            false,
+        );
+
+        assert!(warnings.is_empty());
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(
+            candidates[0].exposure_per_share.get("equity").copied(),
+            Some(dec!(100))
+        );
+    }
+
+    #[test]
+    fn same_asset_account_rows_use_combined_quantity_for_sell_exposure() {
+        let mut h1 = make_holding("SEC-acc-1-asset-a", "AAA", dec!(5), dec!(500));
+        let mut h2 = make_holding("SEC-acc-2-asset-a", "AAA", dec!(5), dec!(500));
+        h1.account_id = "acc-1".to_string();
+        h2.account_id = "acc-2".to_string();
+        h1.instrument.as_mut().unwrap().id = "asset-a".to_string();
+        h2.instrument.as_mut().unwrap().id = "asset-a".to_string();
+        let c1 = make_contribution(&h1, "equity", dec!(500));
+        let c2 = make_contribution(&h2, "equity", dec!(500));
+        let price_by_asset = HashMap::from([("asset-a".to_string(), dec!(100))]);
+        let quantity_by_asset = HashMap::from([("asset-a".to_string(), dec!(10))]);
+
+        let sell_candidates =
+            RebalanceService::build_sell_candidates(&[c1, c2], &price_by_asset, &quantity_by_asset);
+
+        assert_eq!(sell_candidates.len(), 1);
+        assert_eq!(sell_candidates[0].quantity_owned, dec!(10));
+        assert_eq!(
+            sell_candidates[0].exposure_per_share.get("equity").copied(),
+            Some(dec!(100))
+        );
     }
 
     // ── Cash enforcement tests (unchanged behaviour from PR-A) ────────────────
