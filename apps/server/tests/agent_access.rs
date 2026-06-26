@@ -277,7 +277,8 @@ async fn mcp_pat_lifecycle() {
 
     let session = mcp_initialize(&server, &pat).await;
 
-    // tools/list -> the full read-only catalog (16 tools).
+    // tools/list -> the read-only catalog: 16 read tools + get_import_mapping
+    // (also activities:read) = 17.
     let response = mcp_post(
         &server,
         Some(&pat),
@@ -290,8 +291,8 @@ async fn mcp_pat_lifecycle() {
     let tools = list["result"]["tools"].as_array().unwrap();
     assert_eq!(
         tools.len(),
-        16,
-        "read-only catalog must expose 16 tools: {tools:?}"
+        17,
+        "read-only catalog must expose 17 tools (incl. get_import_mapping): {tools:?}"
     );
 
     // (h) tools/call succeeds and writes an audit row (insert is spawned — poll).
@@ -435,10 +436,10 @@ async fn mcp_pat_lifecycle() {
     assert!(purge["purged"].as_u64().unwrap() >= 1);
 }
 
-/// A write/suggest-scoped token sees the draft, suggest, AND commit tools via
-/// `tools/list` — proving scope-gated visibility extends past the read-only
-/// catalog. (Read-only tokens see 16; the full MCP catalog is 16 read + 5
-/// draft/suggest + 2 commit = 23.)
+/// A write/suggest-scoped token sees the draft, suggest, commit, AND import
+/// tools via `tools/list` — proving scope-gated visibility extends past the
+/// read-only catalog. (Read-only tokens see 17; the full MCP catalog is
+/// 16 read + get_import_mapping + 5 draft/suggest + 2 commit + 2 import = 26.)
 #[tokio::test]
 async fn mcp_write_scoped_token_sees_write_tools() {
     let server = spawn_server(true, false).await;
@@ -477,8 +478,12 @@ async fn mcp_write_scoped_token_sees_write_tools() {
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert_eq!(
         tools.len(),
-        23,
-        "full-scope token must see all 23 tools: {names:?}"
+        26,
+        "full-scope token must see all 26 tools: {names:?}"
+    );
+    assert!(
+        names.contains(&"commit_activity_import"),
+        "import tool visible"
     );
     assert!(names.contains(&"record_activity"), "draft tool visible");
     assert!(

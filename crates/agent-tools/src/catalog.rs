@@ -41,6 +41,7 @@ impl AgentToolCatalog {
         let mut tools = crate::tools::v1_read_tools();
         tools.extend(crate::tools::draft_suggest_tools());
         tools.extend(crate::tools::commit_tools());
+        tools.extend(crate::tools::import_tools());
         Self::new(tools)
     }
 
@@ -201,17 +202,23 @@ mod tests {
         // Draft/suggest tools are present.
         assert!(names.contains(&"record_activity"));
         assert!(names.contains(&"prepare_asset_classification"));
-        // Commit tools are NOT exposed to the assistant.
+        // Commit and CSV-import tools are NOT exposed to the assistant.
         assert!(!names.contains(&"commit_activity_draft"));
         assert!(!names.contains(&"commit_activity_drafts"));
+        assert!(!names.contains(&"prepare_activity_import"));
+        assert!(!names.contains(&"commit_activity_import"));
+        assert!(!names.contains(&"get_import_mapping"));
     }
 
     #[test]
-    fn mcp_catalog_includes_commit_tools() {
+    fn mcp_catalog_includes_commit_and_import_tools() {
         let catalog = AgentToolCatalog::mcp_catalog();
         let names: Vec<&str> = catalog.iter().map(|tool| tool.name()).collect();
         assert!(names.contains(&"commit_activity_draft"));
         assert!(names.contains(&"commit_activity_drafts"));
+        assert!(names.contains(&"get_import_mapping"));
+        assert!(names.contains(&"prepare_activity_import"));
+        assert!(names.contains(&"commit_activity_import"));
         // Read-only token still sees exactly 16 read tools.
         assert_eq!(crate::tools::v1_read_tools().len(), 16);
     }

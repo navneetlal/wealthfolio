@@ -6,6 +6,7 @@
 
 pub mod accounts;
 pub mod activities;
+pub mod activity_import;
 pub mod allocation;
 pub mod asset_classification;
 pub mod asset_taxonomies;
@@ -95,6 +96,13 @@ pub use commit_activity::{
     CommitActivityDraftsOutput, CommitError, CommittedActivity,
 };
 
+// MCP-only CSV import tools (validate + dedup-safe import pipeline).
+pub use activity_import::{
+    ActivityImportArgs, ActivityImportRow, CommitActivityImport, CommitActivityImportOutput,
+    GetImportMapping, GetImportMappingArgs, ImportPreviewSummary, ImportRowResult,
+    PrepareActivityImport, PrepareActivityImportOutput,
+};
+
 use std::sync::Arc;
 
 use crate::tool::AgentTool;
@@ -142,6 +150,17 @@ pub fn commit_tools() -> Vec<Arc<dyn AgentTool>> {
     vec![
         Arc::new(CommitActivityDraft),
         Arc::new(CommitActivityDrafts),
+    ]
+}
+
+/// The MCP-only CSV import tools: fetch an account's mapping, preview rows
+/// (validate + duplicate detection), and import through the real pipeline.
+/// Not exposed to the in-app assistant (which has its own `import_csv` flow).
+pub fn import_tools() -> Vec<Arc<dyn AgentTool>> {
+    vec![
+        Arc::new(GetImportMapping),
+        Arc::new(PrepareActivityImport),
+        Arc::new(CommitActivityImport),
     ]
 }
 
