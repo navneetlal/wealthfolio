@@ -78,6 +78,19 @@ impl AgentEnvironment for StubEnv {
     fn taxonomy_service(&self) -> Arc<dyn wealthfolio_core::taxonomies::TaxonomyServiceTrait> {
         unimplemented!("StubEnv")
     }
+    fn portfolio_service(&self) -> Arc<dyn wealthfolio_core::portfolios::PortfolioServiceTrait> {
+        unimplemented!("StubEnv")
+    }
+    fn net_worth_service(
+        &self,
+    ) -> Arc<dyn wealthfolio_core::portfolio::net_worth::NetWorthServiceTrait> {
+        unimplemented!("StubEnv")
+    }
+    fn contribution_limit_service(
+        &self,
+    ) -> Arc<dyn wealthfolio_core::limits::ContributionLimitServiceTrait> {
+        unimplemented!("StubEnv")
+    }
     fn cash_activity_service(
         &self,
     ) -> Arc<dyn wealthfolio_spending::cash_activities::CashActivityServiceTrait> {
@@ -136,7 +149,7 @@ impl AgentTool for HiddenTool {
         serde_json::json!({ "type": "object", "properties": {} })
     }
     fn required_scopes(&self) -> &'static [AgentScope] {
-        &[AgentScope::PortfolioRead]
+        &[AgentScope::HoldingsRead]
     }
     fn access_level(&self) -> AgentToolAccess {
         AgentToolAccess::Read

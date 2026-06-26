@@ -77,7 +77,7 @@ impl AgentTool for GetIncome {
     }
 
     fn required_scopes(&self) -> &'static [AgentScope] {
-        &[AgentScope::PortfolioRead]
+        &[AgentScope::HoldingsRead]
     }
 
     fn access_level(&self) -> AgentToolAccess {
