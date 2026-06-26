@@ -8,6 +8,7 @@ mod events;
 mod features;
 mod main_lib;
 mod models;
+mod oidc;
 mod scheduler;
 mod secrets;
 

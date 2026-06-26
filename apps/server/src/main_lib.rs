@@ -3,7 +3,8 @@ use std::sync::{atomic::AtomicBool, Arc, RwLock};
 
 use crate::{
     ai_environment::ServerAiEnvironment, auth::AuthManager, config::Config,
-    domain_events::WebDomainEventSink, events::EventBus, secrets::build_secret_store,
+    domain_events::WebDomainEventSink, events::EventBus, oidc::OidcManager,
+    secrets::build_secret_store,
 };
 use tracing::{error, warn};
 use tracing_subscriber::prelude::*;
@@ -104,6 +105,7 @@ pub struct AppState {
     pub secret_store: Arc<dyn SecretStore>,
     pub event_bus: EventBus,
     pub auth: Option<Arc<AuthManager>>,
+    pub oidc: Option<Arc<OidcManager>>,
     pub device_enroll_service: Arc<DeviceEnrollService>,
     pub app_sync_repository: Arc<AppSyncRepository>,
     pub device_sync_runtime: Arc<DeviceSyncRuntimeState>,
@@ -783,6 +785,13 @@ pub async fn build_state(config: &Config) -> anyhow::Result<Arc<AppState>> {
         .transpose()?
         .map(Arc::new);
 
+    let oidc_manager = match config.oidc.as_ref() {
+        Some(oidc_config) => Some(Arc::new(
+            OidcManager::discover(oidc_config, config.secrets_encryption_key).await?,
+        )),
+        None => None,
+    };
+
     let state = Arc::new(AppState {
         domain_event_sink,
         account_service,
@@ -816,6 +825,7 @@ pub async fn build_state(config: &Config) -> anyhow::Result<Arc<AppState>> {
         secret_store,
         event_bus,
         auth: auth_manager,
+        oidc: oidc_manager,
         device_enroll_service,
         app_sync_repository,
         device_sync_runtime,

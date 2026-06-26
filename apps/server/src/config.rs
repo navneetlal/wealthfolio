@@ -1,6 +1,7 @@
 use std::{net::SocketAddr, time::Duration};
 
 use crate::auth::{decode_secret_key, derive_keys, AuthConfig, CookieSecurePolicy};
+use crate::oidc::OidcConfig;
 
 pub struct Config {
     pub listen_addr: SocketAddr,
@@ -13,7 +14,10 @@ pub struct Config {
     pub raw_secret_key: Vec<u8>,
     /// HKDF-derived key for secrets encryption
     pub secrets_encryption_key: [u8; 32],
+    /// Session-signing config. Present when password login OR OIDC is configured.
     pub auth: Option<AuthConfig>,
+    /// OIDC SSO config. Present when `WF_OIDC_ISSUER_URL` + `WF_OIDC_CLIENT_ID` are set.
+    pub oidc: Option<OidcConfig>,
 }
 
 impl Config {
@@ -54,34 +58,40 @@ impl Config {
                 .to_string_lossy()
                 .into_owned()
         });
-        let auth = std::env::var("WF_AUTH_PASSWORD_HASH")
+        let password_hash = std::env::var("WF_AUTH_PASSWORD_HASH")
             .ok()
             .map(|hash| hash.trim().to_string())
-            .filter(|hash| !hash.is_empty())
-            .map(|password_hash| {
-                let ttl_minutes = std::env::var("WF_AUTH_TOKEN_TTL_MINUTES")
-                    .ok()
-                    .and_then(|value| value.parse::<u64>().ok())
-                    .filter(|value| *value > 0)
-                    .unwrap_or(60);
-                let cookie_secure_raw =
-                    std::env::var("WF_COOKIE_SECURE").unwrap_or_else(|_| "auto".into());
-                let cookie_secure = match cookie_secure_raw.trim().to_ascii_lowercase().as_str() {
-                    "auto" => CookieSecurePolicy::Auto,
-                    "true" | "1" | "yes" => CookieSecurePolicy::Always,
-                    "false" | "0" | "no" => CookieSecurePolicy::Never,
-                    other => panic!(
-                        "Invalid WF_COOKIE_SECURE value: \"{other}\". \
-                         Expected one of: auto, true, false"
-                    ),
-                };
-                AuthConfig {
-                    password_hash,
-                    jwt_secret: jwt_key.to_vec(),
-                    access_token_ttl: Duration::from_secs(ttl_minutes.saturating_mul(60)),
-                    cookie_secure,
-                }
-            });
+            .filter(|hash| !hash.is_empty());
+
+        let oidc = OidcConfig::from_env();
+
+        // The session signer is needed whenever ANY auth method is enabled.
+        let auth = if password_hash.is_some() || oidc.is_some() {
+            let ttl_minutes = std::env::var("WF_AUTH_TOKEN_TTL_MINUTES")
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .filter(|value| *value > 0)
+                .unwrap_or(60);
+            let cookie_secure_raw =
+                std::env::var("WF_COOKIE_SECURE").unwrap_or_else(|_| "auto".into());
+            let cookie_secure = match cookie_secure_raw.trim().to_ascii_lowercase().as_str() {
+                "auto" => CookieSecurePolicy::Auto,
+                "true" | "1" | "yes" => CookieSecurePolicy::Always,
+                "false" | "0" | "no" => CookieSecurePolicy::Never,
+                other => panic!(
+                    "Invalid WF_COOKIE_SECURE value: \"{other}\". \
+                     Expected one of: auto, true, false"
+                ),
+            };
+            Some(AuthConfig {
+                password_hash,
+                jwt_secret: jwt_key.to_vec(),
+                access_token_ttl: Duration::from_secs(ttl_minutes.saturating_mul(60)),
+                cookie_secure,
+            })
+        } else {
+            None
+        };
         // When auth is enabled, wildcard CORS is incompatible with credentials
         if auth.is_some() && cors_allow.iter().any(|o| o == "*") {
             panic!(
@@ -124,6 +134,7 @@ impl Config {
             raw_secret_key,
             secrets_encryption_key,
             auth,
+            oidc,
         }
     }
 }
