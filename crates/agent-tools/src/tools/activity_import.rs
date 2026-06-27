@@ -425,9 +425,20 @@ impl AgentTool for CommitActivityImport {
         let args: ActivityImportArgs = serde_json::from_value(args)?;
         let rows = to_import_rows(&args.activities)?;
 
+        // Resolve each row (symbol → quote currency, instrument type, asset
+        // resolution) before importing. `import_activities` expects rows the
+        // check step has already filled in; without this, every row carrying a
+        // symbol is rejected for a missing quoteCcy/instrumentType. This mirrors
+        // `prepare_activity_import` and the desktop/web importers (check → import).
+        let checked = env
+            .activity_service()
+            .check_activities_import(rows)
+            .await
+            .map_err(|e| AgentToolError::ExecutionFailed(e.to_string()))?;
+
         let result = env
             .activity_service()
-            .import_activities(rows)
+            .import_activities(checked)
             .await
             .map_err(|e| AgentToolError::ExecutionFailed(e.to_string()))?;
 
