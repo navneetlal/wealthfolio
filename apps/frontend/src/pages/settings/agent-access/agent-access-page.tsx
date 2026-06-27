@@ -9,6 +9,7 @@ import { Icons } from "@wealthfolio/ui/components/ui/icons";
 import { Separator } from "@wealthfolio/ui/components/ui/separator";
 import { SettingsHeader } from "../settings-header";
 import { AuditLogTable } from "./components/audit-log-table";
+import { McpHero } from "./components/mcp-hero";
 import { McpModuleCard } from "./components/mcp-module-card";
 import { McpServerCard } from "./components/mcp-server-card";
 import { PatTable } from "./components/pat-table";
@@ -71,26 +72,36 @@ function WebAgentAccess() {
         </Alert>
       )}
       {status && (
-        <Alert variant={status.mcpEnabled ? "default" : "destructive"}>
-          <Icons.Info className="h-4 w-4" />
-          <AlertTitle>
-            {status.mcpEnabled ? "MCP endpoint enabled" : "MCP endpoint disabled"}
-          </AlertTitle>
-          <AlertDescription>
-            {status.mcpEnabled
-              ? `MCP clients can connect to ${status.endpoint} on this server using a personal access token.`
-              : "The server was started without MCP enabled. Tokens can be managed but won't work until it is enabled."}
-          </AlertDescription>
-        </Alert>
+        <McpHero
+          active={status.mcpEnabled}
+          title={status.mcpEnabled ? "AI Agent Access · enabled" : "AI Agent Access · off"}
+          description={
+            status.mcpEnabled
+              ? `AI agents can connect to ${status.endpoint} on this server using a scoped access token.`
+              : "AI Agent Access is off on this server. Enable it to let AI agents read and act on your portfolio over MCP."
+          }
+          hint={
+            status.mcpEnabled ? undefined : (
+              <>
+                Set <code className="font-mono">WF_MCP_ENABLED=true</code> and restart the server to
+                enable the endpoint, then create a token here.
+              </>
+            )
+          }
+        />
       )}
-      <PatTable serverUrl={serverUrl} />
-      <AuditLogTable
-        disabledNotice={
-          status && !status.auditEnabled
-            ? "Audit logging is off (WF_MCP_AUDIT_ENABLED=false) — new activity will not be recorded."
-            : undefined
-        }
-      />
+      {status?.mcpEnabled && (
+        <>
+          <PatTable serverUrl={serverUrl} />
+          <AuditLogTable
+            disabledNotice={
+              !status.auditEnabled
+                ? "Audit logging is off (WF_MCP_AUDIT_ENABLED=false) — new activity will not be recorded."
+                : undefined
+            }
+          />
+        </>
+      )}
     </>
   );
 }
