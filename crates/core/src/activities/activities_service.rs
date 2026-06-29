@@ -4679,7 +4679,7 @@ impl ActivityServiceTrait for ActivityService {
 
         // ── 3.5: Lightweight pre-insert validation (no asset/FX resolution) ───
         // Catches rows that slipped through the review step without proper resolution.
-        // date errors → "symbol" to match frontend field-keying convention.
+        // Use the review-grid field key so invalid dates highlight the date cell.
         let mut has_validation_errors = false;
         for (_, activity) in import_activities_indexed.iter_mut() {
             let has_symbol = !activity.symbol.trim().is_empty();
@@ -4701,7 +4701,7 @@ impl ActivityServiceTrait for ActivityService {
                 activity.is_valid = false;
                 Self::add_activity_error(
                     activity,
-                    "symbol",
+                    "activityDate",
                     &format!("Invalid date '{}'.", activity.date),
                 );
                 has_validation_errors = true;

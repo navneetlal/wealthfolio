@@ -7297,7 +7297,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_import_prepare_errors_are_keyed_under_symbol_field() {
+    async fn test_import_prepare_date_errors_are_keyed_under_activity_date_field() {
         let account_service = Arc::new(MockAccountService::new());
         let asset_service = Arc::new(MockAssetService::new());
         let fx_service = Arc::new(MockFxService::new());
@@ -7363,8 +7363,8 @@ mod tests {
             .errors
             .as_ref()
             .expect("expected prepare errors");
-        assert!(errors.contains_key("symbol"));
-        assert!(!errors.contains_key("VWRPL"));
+        assert!(errors.contains_key("activityDate"));
+        assert!(!errors.contains_key("symbol"));
     }
 
     #[tokio::test]
