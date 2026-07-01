@@ -212,6 +212,6 @@
     "tryAgain": "Erneut versuchen"
   },
   "errors": {
-    "backupPlatformUnsupported": "Die Sicherung vor der Gerätesynchronisierung wird derzeit nur auf Desktop, Web und iOS unterstützt"
+    "backupPlatformUnsupported": "Die Sicherung vor der Gerätesynchronisierung wird derzeit nur auf Desktop, Web und Mobilgeräten unterstützt"
   }
 }

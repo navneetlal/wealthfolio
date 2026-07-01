@@ -41,7 +41,7 @@ describe("saveAppDataFileViaPicker", () => {
     mocks.stopAccessingSecurityScopedResource.mockResolvedValue(undefined);
   });
 
-  it("copies only pending export files through the iOS security-scoped destination", async () => {
+  it("copies only pending export files through the mobile save destination", async () => {
     const saved = await saveAppDataFileViaPicker(
       "pending-exports/export-id/accounts.csv",
       "accounts.csv",

@@ -218,6 +218,6 @@
     "tryAgain": "Intentar de nuevo"
   },
   "errors": {
-    "backupPlatformUnsupported": "La copia de seguridad antes de la sincronización de dispositivos solo se admite actualmente en escritorio, web e iOS"
+    "backupPlatformUnsupported": "La copia de seguridad antes de la sincronización de dispositivos solo se admite actualmente en escritorio, web y dispositivos móviles"
   }
 }

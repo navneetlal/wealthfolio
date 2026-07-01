@@ -15,21 +15,21 @@ interface PendingExport {
   filename: string;
 }
 
-const isIOSUserAgent = (): boolean => {
+const isMobileUserAgent = (): boolean => {
   if (typeof window === "undefined") {
     return false;
   }
 
   const userAgent = window.navigator.userAgent.toLowerCase();
-  return /iphone|ipad|ipod/.test(userAgent);
+  return /android|iphone|ipad|ipod/.test(userAgent);
 };
 
-const isIOSRuntime = async (): Promise<boolean> => {
+const isMobileRuntime = async (): Promise<boolean> => {
   try {
-    const platform = await invoke<{ os: string }>("get_platform");
-    return platform.os === "ios";
+    const platform = await invoke<{ is_mobile?: boolean; os: string }>("get_platform");
+    return platform.is_mobile ?? (platform.os === "ios" || platform.os === "android");
   } catch {
-    return isIOSUserAgent();
+    return isMobileUserAgent();
   }
 };
 
@@ -85,7 +85,7 @@ export const openFileSaveDialog = async (
   fileName: string,
 ): Promise<boolean> => {
   if (typeof fileContent === "string") {
-    if (await isIOSRuntime()) {
+    if (await isMobileRuntime()) {
       const { relativePath, filename } = await invoke<PendingExport>(
         "write_pending_export_text_file",
         {
@@ -111,7 +111,7 @@ export const openFileSaveDialog = async (
   }
 
   const contentBase64 = toBase64(contentToSave);
-  if (await isIOSRuntime()) {
+  if (await isMobileRuntime()) {
     const { relativePath, filename } = await invoke<PendingExport>("write_pending_export_file", {
       fileName,
       contentBase64,
