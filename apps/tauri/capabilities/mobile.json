@@ -11,6 +11,9 @@
   ],
   "permissions": [
     "core:default",
+    "fs:allow-open",
+    "fs:allow-read",
+    "fs:allow-write",
     "fs:allow-read-file",
     "fs:allow-write-file",
     "fs:allow-read-dir",

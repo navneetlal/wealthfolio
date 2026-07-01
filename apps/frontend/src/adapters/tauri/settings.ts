@@ -3,6 +3,7 @@ import type { Settings, UpdateInfo } from "@/lib/types";
 import type { AppInfo, PlatformInfo } from "../types";
 
 import { invoke, logger } from "./core";
+import { removeAppDataPath, stagePickedDatabaseFileForRestore } from "./files";
 
 export const getSettings = async (): Promise<Settings> => {
   try {
@@ -81,11 +82,26 @@ export const backupDatabaseToPendingExport = async (): Promise<PendingExport> =>
 };
 
 export const restoreDatabase = async (backupFilePath: string): Promise<void> => {
+  let stagedRestore: { relativePath: string; pendingDir: string } | null = null;
+
   try {
-    await invoke<void>("restore_database", { backupFilePath });
+    const platform = await invoke<{ is_mobile?: boolean; os?: string }>("get_platform").catch(
+      () => null,
+    );
+    const shouldStageRestore =
+      platform?.is_mobile === true || platform?.os === "ios" || platform?.os === "android";
+    const restorePath = shouldStageRestore
+      ? (stagedRestore = await stagePickedDatabaseFileForRestore(backupFilePath)).relativePath
+      : backupFilePath;
+
+    await invoke<void>("restore_database", { backupFilePath: restorePath });
   } catch (error) {
     logger.error("Error restoring database.");
     throw error;
+  } finally {
+    if (stagedRestore) {
+      await removeAppDataPath(stagedRestore.pendingDir);
+    }
   }
 };
 

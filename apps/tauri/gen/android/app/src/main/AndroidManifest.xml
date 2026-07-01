@@ -43,7 +43,6 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="https" />
-                <data android:scheme="http" />
                 <data android:host="connect.wealthfolio.app" />
                 
                 
@@ -57,7 +56,6 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="https" />
-                <data android:scheme="http" />
                 <data android:host="connect-staging.wealthfolio.app" />
                 
                 
