@@ -290,7 +290,7 @@ pub fn router() -> Router<Arc<AppState>> {
             get(list_weights).post(save_weights),
         )
         .route(
-            "/allocation-targets/{id}/sell-constraints",
+            "/allocation-targets/{id}/constraints",
             get(list_target_constraints_handler).post(save_target_constraints_handler),
         )
         .route("/allocation-targets/{id}/drift", post(get_drift_for_target))

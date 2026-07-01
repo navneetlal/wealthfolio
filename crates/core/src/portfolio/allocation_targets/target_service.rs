@@ -240,9 +240,7 @@ impl AllocationTargetService {
                 .allow_sells
                 .or_else(|| existing.as_ref().map(|target| target.allow_sells))
                 .unwrap_or(false),
-            max_turnover_bps: input
-                .max_turnover_bps
-                .or_else(|| existing.as_ref().and_then(|target| target.max_turnover_bps)),
+            max_turnover_bps: input.max_turnover_bps,
             created_at: existing
                 .as_ref()
                 .map(|target| target.created_at.clone())
@@ -357,7 +355,7 @@ impl AllocationTargetServiceTrait for AllocationTargetService {
                 .whole_shares_only
                 .unwrap_or(existing.whole_shares_only),
             allow_sells: input.allow_sells.unwrap_or(existing.allow_sells),
-            max_turnover_bps: input.max_turnover_bps.or(existing.max_turnover_bps),
+            max_turnover_bps: input.max_turnover_bps,
             created_at: existing.created_at,
             updated_at: Self::now(),
             archived_at: existing.archived_at,

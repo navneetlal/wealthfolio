@@ -53,6 +53,8 @@ pub struct SellCandidate {
     pub holding_id: String,
     pub asset_id: String,
     pub account_id: String,
+    /// All real account IDs that hold this asset (for account-level constraint filtering).
+    pub source_account_ids: Vec<String>,
     pub symbol: String,
     pub name: Option<String>,
     pub price: Decimal,
@@ -284,9 +286,7 @@ impl DriftPriorityOptimizer {
             return (values.clone(), Decimal::ZERO, vec![]);
         }
 
-        let turnover_cap_value = max_turnover_bps
-            .filter(|p| *p > Decimal::ZERO)
-            .map(|p| total_value * p / dec!(10000));
+        let turnover_cap_value = max_turnover_bps.map(|p| total_value * p / dec!(10000));
 
         let scale = dec!(10000);
         let initial_values = values.clone();
@@ -1293,6 +1293,7 @@ mod tests {
             holding_id: "h-bond".to_string(),
             asset_id: "a-bond".to_string(),
             account_id: "acc-1".to_string(),
+            source_account_ids: vec!["acc-1".to_string()],
             symbol: "BND".to_string(),
             name: Some("BND".to_string()),
             price: dec!(100),
@@ -1486,6 +1487,7 @@ mod tests {
                 holding_id: "h-bnd".to_string(),
                 asset_id: "a-bnd".to_string(),
                 account_id: "acc-1".to_string(),
+                source_account_ids: vec!["acc-1".to_string()],
                 symbol: "BND".to_string(),
                 name: Some("Vanguard Total Bond".to_string()),
                 price: dec!(100),

@@ -294,10 +294,25 @@ impl RebalanceService {
             }
 
             let repr = contribs[0];
+            // Collect all real account IDs across contributions for account-level filtering.
+            let mut source_account_ids: Vec<String> = contribs
+                .iter()
+                .flat_map(|c| {
+                    if c.source_account_ids.is_empty() {
+                        vec![c.account_id.clone()]
+                    } else {
+                        c.source_account_ids.clone()
+                    }
+                })
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter()
+                .collect();
+            source_account_ids.sort_unstable();
             sell_candidates.push(SellCandidate {
                 holding_id: asset_id.to_string(),
                 asset_id: repr.asset_id.clone(),
                 account_id: repr.account_id.clone(),
+                source_account_ids,
                 symbol: repr.symbol.clone(),
                 name: Some(repr.name.clone()),
                 price,
@@ -488,7 +503,10 @@ impl RebalanceServiceTrait for RebalanceService {
                         });
                         return false;
                     }
-                    if avoid_selling.contains(&c.account_id) {
+                    if avoid_selling
+                        .iter()
+                        .any(|a| c.source_account_ids.contains(a) || a == &c.account_id)
+                    {
                         classification_warnings.push(super::model::RebalanceWarning {
                             kind: super::model::RebalanceWarningKind::ConstraintSkippedSell,
                             category_id: String::new(),
@@ -520,10 +538,7 @@ impl RebalanceServiceTrait for RebalanceService {
             })
             .collect();
 
-        let max_turnover_bps = profile
-            .max_turnover_bps
-            .filter(|&bps| bps > 0)
-            .map(Decimal::from);
+        let max_turnover_bps = profile.max_turnover_bps.map(Decimal::from);
 
         let optimizer_input = RebalanceInput {
             profile: RebalanceProfile {
