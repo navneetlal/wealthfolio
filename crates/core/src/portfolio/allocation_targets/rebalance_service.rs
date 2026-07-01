@@ -439,8 +439,7 @@ impl RebalanceServiceTrait for RebalanceService {
         // Load persisted constraints from DB.
         let constraints = self
             .allocation_target_service
-            .list_target_constraints(&input.target_id)
-            .unwrap_or_default();
+            .list_target_constraints(&input.target_id)?;
         let do_not_sell_asset_ids: Vec<String> = constraints
             .iter()
             .filter(|c| {
@@ -617,6 +616,7 @@ impl RebalanceServiceTrait for RebalanceService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::errors::DatabaseError;
     use crate::portfolio::allocation::{
         AllocationHoldings, HoldingAllocationContribution, PortfolioAllocations,
         TaxonomyHoldingContributions,
@@ -861,6 +861,7 @@ mod tests {
 
     struct MockTargetService {
         profile: AllocationTarget,
+        constraint_load_error: bool,
     }
 
     #[async_trait]
@@ -910,6 +911,11 @@ mod tests {
             _: &str,
         ) -> CoreResult<Vec<crate::portfolio::allocation_targets::AllocationTargetConstraint>>
         {
+            if self.constraint_load_error {
+                return Err(CoreError::Database(DatabaseError::QueryFailed(
+                    "constraint load failed".to_string(),
+                )));
+            }
             Ok(vec![])
         }
         async fn save_target_constraints(
@@ -1052,7 +1058,27 @@ mod tests {
             }
         }
         RebalanceService::new(
-            Arc::new(MockTargetService { profile }),
+            Arc::new(MockTargetService {
+                profile,
+                constraint_load_error: false,
+            }),
+            Arc::new(MockDriftService { report }),
+            Arc::new(MockAllocationService { contributions }),
+            Arc::new(MockHoldingsService { holdings }),
+        )
+    }
+
+    fn make_service_with_constraint_load_error(
+        profile: AllocationTarget,
+        report: DriftReport,
+        contributions: TaxonomyHoldingContributions,
+        holdings: Vec<Holding>,
+    ) -> RebalanceService {
+        RebalanceService::new(
+            Arc::new(MockTargetService {
+                profile,
+                constraint_load_error: true,
+            }),
             Arc::new(MockDriftService { report }),
             Arc::new(MockAllocationService { contributions }),
             Arc::new(MockHoldingsService { holdings }),
@@ -1068,6 +1094,23 @@ mod tests {
             aggregated_account_id: "agg".to_string(),
             scenario_mode: ScenarioMode::CashFlowOnly,
         }
+    }
+
+    #[tokio::test]
+    async fn calculate_plan_propagates_constraint_load_errors() {
+        let total = dec!(10000);
+        let h = make_holding("h1", "VTI", dec!(100), total);
+        let c = make_contribution(&h, "equity", total);
+        let svc = make_service_with_constraint_load_error(
+            make_profile(RebalanceGoal::ExactTarget, false),
+            make_report(vec![make_drift_row("equity", 10000, 10000, total)], total),
+            make_contributions(vec![c]),
+            vec![h],
+        );
+
+        let err = svc.calculate_plan(make_input(dec!(0))).await.unwrap_err();
+
+        assert!(err.to_string().contains("constraint load failed"));
     }
 
     #[test]
@@ -1236,6 +1279,7 @@ mod tests {
         let svc = RebalanceService::new(
             Arc::new(MockTargetService {
                 profile: make_profile(RebalanceGoal::ExactTarget, false),
+                constraint_load_error: false,
             }),
             Arc::new(MockDriftService {
                 report: make_report(
@@ -1269,6 +1313,7 @@ mod tests {
         let svc = RebalanceService::new(
             Arc::new(MockTargetService {
                 profile: make_sell_profile(RebalanceGoal::ExactTarget),
+                constraint_load_error: false,
             }),
             Arc::new(MockDriftService {
                 report: make_report(
@@ -1311,7 +1356,10 @@ mod tests {
         let mut contributions = make_contributions(vec![c]);
         contributions.taxonomy_id = "industries_gics".to_string();
         let svc = RebalanceService::new(
-            Arc::new(MockTargetService { profile }),
+            Arc::new(MockTargetService {
+                profile,
+                constraint_load_error: false,
+            }),
             Arc::new(MockDriftService {
                 report: make_report(vec![make_drift_row("45", 6000, 7000, total)], total),
             }),

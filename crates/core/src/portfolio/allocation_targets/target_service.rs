@@ -9,7 +9,8 @@ use crate::taxonomies::{Category, TaxonomyServiceTrait};
 
 use super::model::{
     AllocationTarget, AllocationTargetConstraint, AllocationTargetWeight, BandType,
-    NewAllocationTarget, NewAllocationTargetWeight, RebalanceGoal, SaveAllocationTargetResult,
+    ConstraintAction, ConstraintEffect, ConstraintSubjectType, NewAllocationTarget,
+    NewAllocationTargetWeight, RebalanceGoal, SaveAllocationTargetResult,
 };
 use super::validation::{validate_new_target, validate_weights_sum};
 
@@ -119,6 +120,35 @@ impl AllocationTargetService {
             "AllocationTarget {} not found",
             id
         )))
+    }
+
+    fn validate_v1_sell_protection_constraint(
+        constraint: &AllocationTargetConstraint,
+    ) -> CoreResult<()> {
+        if constraint.subject_id.trim().is_empty() {
+            return Err(CoreError::Validation(ValidationError::InvalidInput(
+                "sell protection subject_id is required".to_string(),
+            )));
+        }
+        if !matches!(
+            constraint.subject_type,
+            ConstraintSubjectType::Asset | ConstraintSubjectType::Account
+        ) {
+            return Err(CoreError::Validation(ValidationError::InvalidInput(
+                "sell protection supports asset and account subjects only".to_string(),
+            )));
+        }
+        if !matches!(constraint.action, ConstraintAction::Sell) {
+            return Err(CoreError::Validation(ValidationError::InvalidInput(
+                "sell protection supports sell action only".to_string(),
+            )));
+        }
+        if !matches!(constraint.effect, ConstraintEffect::Block) {
+            return Err(CoreError::Validation(ValidationError::InvalidInput(
+                "sell protection supports block effect only".to_string(),
+            )));
+        }
+        Ok(())
     }
 
     fn validate_target_taxonomy(&self, taxonomy_id: &str) -> CoreResult<()> {
@@ -462,6 +492,15 @@ impl AllocationTargetServiceTrait for AllocationTargetService {
             .get_target(target_id)?
             .ok_or_else(|| Self::target_not_found(target_id))?;
 
+        let constraints = constraints
+            .into_iter()
+            .map(|mut constraint| {
+                Self::validate_v1_sell_protection_constraint(&constraint)?;
+                constraint.target_id = target_id.to_string();
+                Ok(constraint)
+            })
+            .collect::<CoreResult<Vec<_>>>()?;
+
         self.repository
             .save_target_constraints(target_id, constraints)
             .await
@@ -471,7 +510,9 @@ impl AllocationTargetServiceTrait for AllocationTargetService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::portfolio::allocation_targets::{ScopeType, TriggerType};
+    use crate::portfolio::allocation_targets::{
+        ConstraintAction, ConstraintEffect, ConstraintSubjectType, ScopeType, TriggerType,
+    };
     use crate::taxonomies::{
         AssetTaxonomyAssignment, NewAssetTaxonomyAssignment, NewCategory, NewTaxonomy, Taxonomy,
         TaxonomyWithCategories,
@@ -560,6 +601,25 @@ mod tests {
             target_bps: 10000,
             is_locked: false,
             is_required: true,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: "2026-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    fn constraint(
+        subject_type: ConstraintSubjectType,
+        action: ConstraintAction,
+        effect: ConstraintEffect,
+    ) -> AllocationTargetConstraint {
+        AllocationTargetConstraint {
+            id: "constraint-1".to_string(),
+            target_id: "client-target-id".to_string(),
+            subject_type,
+            subject_id: "subject-1".to_string(),
+            action,
+            effect,
+            reason: None,
+            metadata_json: None,
             created_at: "2026-01-01T00:00:00Z".to_string(),
             updated_at: "2026-01-01T00:00:00Z".to_string(),
         }
@@ -882,6 +942,77 @@ mod tests {
 
         let created = service.create_target(input).await.unwrap();
         assert_eq!(created.band_type, BandType::Hybrid);
+    }
+
+    #[tokio::test]
+    async fn save_target_constraints_rewrites_client_target_id() {
+        let service = AllocationTargetService::new(
+            Arc::new(MockAllocationTargetRepository {
+                target: target("asset_classes"),
+                weights: vec![],
+            }),
+            Arc::new(MockTaxonomyService),
+        );
+
+        let saved = service
+            .save_target_constraints(
+                "target-1",
+                vec![constraint(
+                    ConstraintSubjectType::Asset,
+                    ConstraintAction::Sell,
+                    ConstraintEffect::Block,
+                )],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].target_id, "target-1");
+    }
+
+    #[tokio::test]
+    async fn save_target_constraints_rejects_non_v1_constraint_shape() {
+        let service = AllocationTargetService::new(
+            Arc::new(MockAllocationTargetRepository {
+                target: target("asset_classes"),
+                weights: vec![],
+            }),
+            Arc::new(MockTaxonomyService),
+        );
+
+        let cases = vec![
+            constraint(
+                ConstraintSubjectType::Category,
+                ConstraintAction::Sell,
+                ConstraintEffect::Block,
+            ),
+            constraint(
+                ConstraintSubjectType::Asset,
+                ConstraintAction::Buy,
+                ConstraintEffect::Block,
+            ),
+            constraint(
+                ConstraintSubjectType::Asset,
+                ConstraintAction::Trade,
+                ConstraintEffect::Block,
+            ),
+            constraint(
+                ConstraintSubjectType::Asset,
+                ConstraintAction::Sell,
+                ConstraintEffect::Avoid,
+            ),
+        ];
+
+        for invalid in cases {
+            let err = service
+                .save_target_constraints("target-1", vec![invalid])
+                .await
+                .unwrap_err();
+            assert!(
+                err.to_string().contains("sell protection"),
+                "unexpected error: {err}"
+            );
+        }
     }
 
     #[tokio::test]

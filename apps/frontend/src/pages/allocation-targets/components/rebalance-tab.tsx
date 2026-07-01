@@ -268,6 +268,8 @@ function exportCsv(plan: RebalancePlan, currency: string, profileName: string) {
     "Symbol",
     "Name",
     "Category",
+    "Account",
+    "Holding ID",
     `Amount (${currency})`,
     "Shares",
     `Last Price (${currency})`,
@@ -282,6 +284,8 @@ function exportCsv(plan: RebalancePlan, currency: string, profileName: string) {
       t.symbol ?? "",
       t.name ?? "",
       t.categoryName,
+      t.accountId ?? "",
+      t.holdingId ?? "",
       t.estimatedAmount.toFixed(fractionDigits),
       t.quantity != null ? t.quantity.toFixed(t.quantity % 1 === 0 ? 0 : 4) : "",
       t.estimatedPrice != null ? t.estimatedPrice.toFixed(fractionDigits) : "",
@@ -314,6 +318,7 @@ function copyToText(plan: RebalancePlan, currency: string) {
     ...plan.trades.map(
       (t) =>
         `${t.action.toUpperCase()}  ${t.symbol ?? t.categoryName}  ${formatAmount(t.estimatedAmount, currency)}` +
+        (t.accountId ? `  account ${t.accountId}` : "") +
         (t.quantity != null ? `  ${t.quantity.toFixed(t.quantity % 1 === 0 ? 0 : 4)} sh` : "") +
         (t.estimatedPrice != null ? ` @ ${formatAmount(t.estimatedPrice, currency)}` : ""),
     ),
@@ -1073,6 +1078,11 @@ function TradesTable({ trades, currency }: { trades: SuggestedManualTrade[]; cur
                   <div className="text-muted-foreground mt-1 truncate text-xs">{t.name}</div>
                 )}
                 <div className="text-muted-foreground mt-1 font-mono text-xs">{t.categoryName}</div>
+                {t.accountId && (
+                  <div className="text-muted-foreground mt-1 truncate font-mono text-xs">
+                    Acct {t.accountId}
+                  </div>
+                )}
               </div>
               <div className="shrink-0 text-right">
                 <div className="text-foreground font-mono text-sm font-semibold tabular-nums">
@@ -1126,7 +1136,7 @@ function TradesTable({ trades, currency }: { trades: SuggestedManualTrade[]; cur
             <tr className="border-border text-muted-foreground border-b font-mono text-xs uppercase tracking-wider">
               <th className="py-2.5 pl-5 pr-2 text-left font-medium">Action</th>
               <th className="py-2.5 pr-3 text-left font-medium">Ticker</th>
-              <th className="py-2.5 pl-14 pr-3 text-left font-medium">Category</th>
+              <th className="py-2.5 pl-14 pr-3 text-left font-medium">Category / Account</th>
               <th className="py-2.5 pr-3 text-right font-medium">Amount</th>
               <th className="py-2.5 pr-3 text-right font-medium">Shares</th>
               <th className="py-2.5 pr-7 text-right font-medium">Last price</th>
@@ -1153,7 +1163,10 @@ function TradesTable({ trades, currency }: { trades: SuggestedManualTrade[]; cur
                     <span className="text-muted-foreground">—</span>
                   )}
                 </td>
-                <td className="text-muted-foreground pl-14 pr-3 text-xs">{t.categoryName}</td>
+                <td className="text-muted-foreground pl-14 pr-3 text-xs">
+                  <div>{t.categoryName}</div>
+                  {t.accountId && <div className="truncate font-mono">Acct {t.accountId}</div>}
+                </td>
                 <td className="text-foreground pr-3 text-right font-semibold tabular-nums">
                   {formatAmount(t.estimatedAmount, currency)}
                 </td>

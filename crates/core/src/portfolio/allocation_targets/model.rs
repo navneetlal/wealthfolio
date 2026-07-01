@@ -441,6 +441,8 @@ pub struct SuggestedManualTrade {
     pub category_id: String,
     pub category_name: String,
     pub asset_id: Option<String>,
+    pub account_id: Option<String>,
+    pub holding_id: Option<String>,
     pub symbol: Option<String>,
     pub name: Option<String>,
     pub quantity: Option<Decimal>,

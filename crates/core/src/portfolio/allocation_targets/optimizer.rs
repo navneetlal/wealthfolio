@@ -475,7 +475,7 @@ impl DriftPriorityOptimizer {
                                 category_id: String::new(),
                                 message: format!(
                                     "Turnover cap ({:.1}%) reached — {:.2} of {:.2} portfolio already sold.",
-                                    max_turnover_bps.unwrap_or_default(),
+                                    max_turnover_bps.unwrap_or_default() / dec!(100),
                                     cumulative_sold,
                                     total_value,
                                 ),
@@ -572,6 +572,8 @@ impl DriftPriorityOptimizer {
                 category_id: primary_cat_id,
                 category_name: primary_cat_name,
                 asset_id: Some(candidate.asset_id.clone()),
+                account_id: Some(candidate.account_id.clone()),
+                holding_id: Some(candidate.holding_id.clone()),
                 symbol: Some(candidate.symbol.clone()),
                 name: candidate.name.clone(),
                 quantity: Some(shares),
@@ -1130,6 +1132,8 @@ impl RebalanceOptimizer for DriftPriorityOptimizer {
                 category_id: primary_cat_id,
                 category_name: primary_cat_name,
                 asset_id: Some(candidate.asset_id.clone()),
+                account_id: None,
+                holding_id: None,
                 symbol: Some(candidate.symbol.clone()),
                 name: candidate.name.clone(),
                 quantity: Some(shares),
@@ -1167,6 +1171,8 @@ impl RebalanceOptimizer for DriftPriorityOptimizer {
                     category_id: cat.category_id.clone(),
                     category_name: cat.category_name.clone(),
                     asset_id: None,
+                    account_id: None,
+                    holding_id: None,
                     symbol: None,
                     name: None,
                     quantity: None,
@@ -1563,6 +1569,43 @@ mod tests {
                 .any(|w| w.kind == RebalanceWarningKind::TurnoverCapReached),
             "should emit TurnoverCapReached warning"
         );
+    }
+
+    #[test]
+    fn turnover_cap_warning_formats_basis_points_as_percent() {
+        let optimizer = DriftPriorityOptimizer;
+        let mut input = make_sell_rebalance_input();
+        input.profile.whole_shares_only = true;
+        input.max_turnover_bps = Some(dec!(50));
+
+        let plan = optimizer.plan(input).unwrap();
+
+        let warning = plan
+            .warnings
+            .iter()
+            .find(|w| w.kind == RebalanceWarningKind::TurnoverCapReached)
+            .expect("turnover warning expected");
+        assert!(
+            warning.message.contains("(0.5%)"),
+            "turnover warning should format bps as percent: {}",
+            warning.message
+        );
+    }
+
+    #[test]
+    fn sell_trade_preserves_account_and_holding_context() {
+        let optimizer = DriftPriorityOptimizer;
+        let input = make_sell_rebalance_input();
+
+        let plan = optimizer.plan(input).unwrap();
+
+        let sell = plan
+            .trades
+            .iter()
+            .find(|t| t.action == "sell")
+            .expect("sell trade expected");
+        assert_eq!(sell.account_id.as_deref(), Some("acc-1"));
+        assert_eq!(sell.holding_id.as_deref(), Some("h-bnd"));
     }
 
     #[test]

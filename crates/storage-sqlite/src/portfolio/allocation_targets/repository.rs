@@ -371,11 +371,12 @@ impl AllocationTargetRepositoryTrait for AllocationTargetRepository {
     {
         use crate::schema::allocation_target_constraints;
         let target_id_owned = target_id.to_string();
+        let row_target_id = target_id_owned.clone();
         let db_rows: Vec<AllocationTargetConstraintDB> = constraints
             .iter()
             .map(|c| AllocationTargetConstraintDB {
                 id: c.id.clone(),
-                target_id: c.target_id.clone(),
+                target_id: row_target_id.clone(),
                 subject_type: c.subject_type.as_str().to_string(),
                 subject_id: c.subject_id.clone(),
                 action: c.action.as_str().to_string(),
@@ -439,7 +440,8 @@ mod tests {
     use diesel::dsl::count_star;
     use tempfile::tempdir;
     use wealthfolio_core::portfolio::allocation_targets::{
-        BandType, RebalanceGoal, ScopeType, TriggerType,
+        AllocationTargetConstraint, BandType, ConstraintAction, ConstraintEffect,
+        ConstraintSubjectType, RebalanceGoal, ScopeType, TriggerType,
     };
     use wealthfolio_core::taxonomies::TaxonomyRepositoryTrait;
 
@@ -500,6 +502,21 @@ mod tests {
         }
     }
 
+    fn constraint(id: &str, target_id: &str) -> AllocationTargetConstraint {
+        AllocationTargetConstraint {
+            id: id.to_string(),
+            target_id: target_id.to_string(),
+            subject_type: ConstraintSubjectType::Asset,
+            subject_id: "asset-1".to_string(),
+            action: ConstraintAction::Sell,
+            effect: ConstraintEffect::Block,
+            reason: None,
+            metadata_json: None,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: "2026-01-01T00:00:00Z".to_string(),
+        }
+    }
+
     fn outbox_rows(repo: &AllocationTargetRepository) -> Vec<(String, String, String)> {
         let conn = &mut get_connection(&repo.pool).expect("conn");
         sync_outbox::table
@@ -530,6 +547,24 @@ mod tests {
         assert_eq!(saved.len(), 1);
         assert_eq!(saved[0].taxonomy_id, "asset_classes");
         assert_eq!(saved[0].category_id, "CASH");
+    }
+
+    #[tokio::test]
+    async fn save_target_constraints_uses_route_target_id() {
+        let repo = setup_repo();
+        repo.create_target(target("asset_classes")).await.unwrap();
+        let mut other = target("asset_classes");
+        other.id = "target-2".to_string();
+        repo.create_target(other).await.unwrap();
+
+        let saved = repo
+            .save_target_constraints("target-1", vec![constraint("constraint-1", "target-2")])
+            .await
+            .unwrap();
+
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].target_id, "target-1");
+        assert!(repo.list_target_constraints("target-2").unwrap().is_empty());
     }
 
     #[tokio::test]

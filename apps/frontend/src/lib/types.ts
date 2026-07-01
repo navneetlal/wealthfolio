@@ -2591,6 +2591,8 @@ export interface SuggestedManualTrade {
   categoryId: string;
   categoryName: string;
   assetId?: string | null;
+  accountId?: string | null;
+  holdingId?: string | null;
   symbol?: string | null;
   name?: string | null;
   quantity?: number | null;
