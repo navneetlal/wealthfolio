@@ -13,13 +13,20 @@ val tauriProperties = Properties().apply {
     }
 }
 
+val wealthfolioAndroidMinSdk = 24
+val wealthfolioAndroidNdkVersion = "28.2.13676358"
+
+extra["wealthfolioAndroidMinSdk"] = wealthfolioAndroidMinSdk.toString()
+extra["wealthfolioAndroidNdkVersion"] = wealthfolioAndroidNdkVersion
+
 android {
     compileSdk = 36
     namespace = "com.teymz.wealthfolio"
+    ndkVersion = wealthfolioAndroidNdkVersion
     defaultConfig {
         manifestPlaceholders["usesCleartextTraffic"] = "false"
         applicationId = "com.teymz.wealthfolio"
-        minSdk = 24
+        minSdk = wealthfolioAndroidMinSdk
         targetSdk = 36
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
