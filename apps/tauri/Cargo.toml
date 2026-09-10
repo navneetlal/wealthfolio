@@ -22,7 +22,7 @@ wealthfolio-spending = { workspace = true }
 wealthfolio-agent-tools = { workspace = true }
 
 # Tauri
-tauri = { version = "2.10", features = [] }
+tauri = { version = "2.11.5", features = [] }
 tauri-plugin-fs = "2.5"
 tauri-plugin-dialog = "2"
 tauri-plugin-shell = "2"
