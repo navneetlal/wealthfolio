@@ -20,6 +20,11 @@ urlencoding = "2"
 yahoo_finance_api = "4.2"
 lazy_static = "1.4"
 
+[target.'cfg(target_os = "android")'.dependencies]
+# Yahoo 4.2 uses reqwest 0.13, independently of the workspace's 0.12 client.
+reqwest-yahoo = { package = "reqwest", version = "0.13.5", default-features = false, features = ["rustls"] }
+webpki-root-certs = "1.0.9"
+
 [dev-dependencies]
 rust_decimal_macros = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
