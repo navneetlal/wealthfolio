@@ -38,6 +38,8 @@
     "dialog:default",
     "shell:default",
     "deep-link:default",
+    "web-auth:default",
+    "web-auth:allow-authenticate",
     "core:app:allow-set-app-theme",
     "core:window:allow-set-theme",
     "core:window:allow-theme",
