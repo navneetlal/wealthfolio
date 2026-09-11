@@ -1808,42 +1808,6 @@ impl HealthServiceTrait for MockHealthService {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn account(id: &str, is_active: bool, is_archived: bool) -> Account {
-        Account {
-            id: id.to_string(),
-            name: id.to_string(),
-            is_active,
-            is_archived,
-            ..Account::default()
-        }
-    }
-
-    #[test]
-    fn mock_account_service_filters_active_non_archived_accounts() {
-        let service = MockAccountService {
-            accounts: vec![
-                account("visible", true, false),
-                account("archived", true, true),
-                account("hidden", false, false),
-            ],
-        };
-
-        let ids: Vec<String> = service
-            .get_active_non_archived_accounts()
-            .expect("accounts")
-            .into_iter()
-            .map(|account| account.id)
-            .collect();
-
-        assert_eq!(ids, vec!["visible"]);
-    }
-}
-
-// Empty read fixtures for assistant tools added after the original mock environment.
 struct EmptyPortfolioService;
 #[async_trait::async_trait]
 impl wealthfolio_core::portfolios::PortfolioServiceTrait for EmptyPortfolioService {
@@ -1941,3 +1905,40 @@ impl wealthfolio_core::limits::ContributionLimitServiceTrait for EmptyContributi
         unimplemented!("empty fixture")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn account(id: &str, is_active: bool, is_archived: bool) -> Account {
+        Account {
+            id: id.to_string(),
+            name: id.to_string(),
+            is_active,
+            is_archived,
+            ..Account::default()
+        }
+    }
+
+    #[test]
+    fn mock_account_service_filters_active_non_archived_accounts() {
+        let service = MockAccountService {
+            accounts: vec![
+                account("visible", true, false),
+                account("archived", true, true),
+                account("hidden", false, false),
+            ],
+        };
+
+        let ids: Vec<String> = service
+            .get_active_non_archived_accounts()
+            .expect("accounts")
+            .into_iter()
+            .map(|account| account.id)
+            .collect();
+
+        assert_eq!(ids, vec!["visible"]);
+    }
+}
+
+// Empty read fixtures for assistant tools added after the original mock environment.
