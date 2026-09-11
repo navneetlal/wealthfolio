@@ -2,7 +2,8 @@ import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-const root = fileURLToPath(new URL("../src/i18n/locales/", import.meta.url));
+// An optional locale directory lets fixture tests exercise the same CLI as CI.
+const root = process.argv[2] ?? fileURLToPath(new URL("../src/i18n/locales/", import.meta.url));
 const flatten = (value, prefix = "") => {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     return Object.fromEntries(
