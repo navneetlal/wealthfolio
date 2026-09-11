@@ -60,7 +60,9 @@ const toBase64 = (bytes: Uint8Array): string => {
 };
 
 const restoreId = (): string => {
-  return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return (
+    globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  );
 };
 
 const describeError = (error: unknown): string => {
