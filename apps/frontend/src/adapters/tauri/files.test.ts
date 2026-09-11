@@ -83,16 +83,15 @@ describe("saveAppDataFileViaPicker", () => {
       filters: [{ name: "CSV File", extensions: ["csv"] }],
     });
     expect(mocks.startAccessingSecurityScopedResource).toHaveBeenCalledWith("/picked/accounts.csv");
-    expect(mocks.openFile).toHaveBeenNthCalledWith(
-      1,
-      "pending-exports/export-id/accounts.csv",
-      { read: true, baseDir: "AppData" },
-    );
-    expect(mocks.openFile).toHaveBeenNthCalledWith(
-      2,
-      "/picked/accounts.csv",
-      { write: true, create: true, truncate: true },
-    );
+    expect(mocks.openFile).toHaveBeenNthCalledWith(1, "pending-exports/export-id/accounts.csv", {
+      read: true,
+      baseDir: "AppData",
+    });
+    expect(mocks.openFile).toHaveBeenNthCalledWith(2, "/picked/accounts.csv", {
+      write: true,
+      create: true,
+      truncate: true,
+    });
     expect(destination.write).toHaveBeenCalledWith(new Uint8Array([1, 2, 3]));
     expect(destination.close).toHaveBeenCalled();
     expect(source.close).toHaveBeenCalled();
