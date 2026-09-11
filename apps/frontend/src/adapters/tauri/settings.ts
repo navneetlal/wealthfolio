@@ -1,4 +1,5 @@
 // Settings Commands
+import { appDataDir, join } from "@tauri-apps/api/path";
 import type { Settings, UpdateInfo } from "@/lib/types";
 import type { AppInfo, PlatformInfo } from "../types";
 
@@ -90,9 +91,11 @@ export const restoreDatabase = async (backupFilePath: string): Promise<void> => 
     );
     const shouldStageRestore =
       platform?.is_mobile === true || platform?.os === "ios" || platform?.os === "android";
-    const restorePath = shouldStageRestore
-      ? (stagedRestore = await stagePickedDatabaseFileForRestore(backupFilePath)).relativePath
-      : backupFilePath;
+    let restorePath = backupFilePath;
+    if (shouldStageRestore) {
+      stagedRestore = await stagePickedDatabaseFileForRestore(backupFilePath);
+      restorePath = await join(await appDataDir(), stagedRestore.relativePath);
+    }
 
     await invoke<void>("restore_database", { backupFilePath: restorePath });
   } catch (error) {
