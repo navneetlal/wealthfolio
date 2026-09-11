@@ -12,8 +12,31 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      frontend: ${{ steps.filter.outputs.frontend }}
+      rust: ${{ steps.filter.outputs.rust }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Test change detection
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
+      - name: Classify changed files
+        id: filter
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git diff --name-only -z "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed-files"
+          python3 .github/scripts/ci_changes.py < "$RUNNER_TEMP/changed-files" >> "$GITHUB_OUTPUT"
+
   frontend-check:
     name: Frontend Check
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -63,6 +86,8 @@ jobs:
 
   rust-check:
     name: Rust Check
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     env:
       CARGO_INCREMENTAL: 0
@@ -109,18 +134,23 @@ jobs:
   build-status:
     name: Build Status
     runs-on: ubuntu-latest
-    needs: [frontend-check, rust-check]
+    needs: [changes, frontend-check, rust-check]
     if: always()
 
     steps:
       - name: Check build status
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          FRONTEND_REQUIRED: ${{ needs.changes.outputs.frontend }}
+          RUST_REQUIRED: ${{ needs.changes.outputs.rust }}
+          FRONTEND_RESULT: ${{ needs.frontend-check.result }}
+          RUST_RESULT: ${{ needs.rust-check.result }}
         run: |
-          if [[ "${{ needs.frontend-check.result }}" == "failure" ]] || [[ "${{ needs.rust-check.result }}" == "failure" ]]; then
-            echo "❌ Build failed"
-            exit 1
-          elif [[ "${{ needs.frontend-check.result }}" == "cancelled" ]] || [[ "${{ needs.rust-check.result }}" == "cancelled" ]]; then
-            echo "⚠️ Build was cancelled"
-            exit 1
-          else
-            echo "✅ All checks passed"
+          test "$CHANGES_RESULT" = success
+          if [ "$FRONTEND_REQUIRED" = true ]; then
+            test "$FRONTEND_RESULT" = success
           fi
+          if [ "$RUST_REQUIRED" = true ]; then
+            test "$RUST_RESULT" = success
+          fi
+          echo "All required checks passed."
