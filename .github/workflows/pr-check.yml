@@ -149,6 +149,9 @@ jobs:
           # Required for outbox tests in storage-sqlite
           CONNECT_API_URL: http://test.local
 
+      - name: Test AI tools with fixture support
+        run: cargo test --locked -p wealthfolio-ai --features test-utils
+
       - name: Check release build (src-server)
         run: cargo check --locked -p wealthfolio-server --release
 
