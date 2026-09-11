@@ -85,7 +85,7 @@ open class BuildTask : DefaultTask() {
                     "$executable.cmd",
                     "$executable.bat",
                 )
-                
+
                 var lastException: Exception = e
                 for (fallback in fallbacks) {
                     try {
