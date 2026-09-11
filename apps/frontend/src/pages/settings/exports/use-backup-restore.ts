@@ -156,9 +156,18 @@ export function useBackupRestore() {
     },
     onError: (error) => {
       logger.error(`Error during restore: ${String(error)}`);
+      const message =
+        typeof error === "string"
+          ? error
+          : error &&
+              typeof error === "object" &&
+              "message" in error &&
+              typeof error.message === "string"
+            ? error.message
+            : "";
       toast({
         title: "Restore failed",
-        description: error instanceof Error ? error.message : "An unknown error occurred",
+        description: message || "An unknown error occurred",
         variant: "destructive",
       });
     },
