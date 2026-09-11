@@ -32,7 +32,7 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   publicDir: "public",
   optimizeDeps: {
-    include: ["lucide-react", "recharts"],
+    include: ["lucide-react", "recharts", "@tauri-apps/plugin-barcode-scanner"],
   },
   define: {
     __BUILD_TARGET__: JSON.stringify(buildTarget),
