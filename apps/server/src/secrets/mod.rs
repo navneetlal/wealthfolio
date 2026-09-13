@@ -41,14 +41,12 @@ impl fmt::Debug for FileSecretStore {
 }
 
 #[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct PlainSecrets {
     version: u32,
     secrets: HashMap<String, String>,
 }
 
 #[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct EncryptedSecrets {
     version: u32,
     nonce: String,
@@ -71,17 +69,11 @@ fn read_vault(path: &Path) -> Result<Option<Vec<u8>>> {
 
 fn decode_plain(raw: &[u8]) -> Result<HashMap<String, String>> {
     let plain: PlainSecrets = serde_json::from_slice(raw).map_err(|_| invalid_store())?;
-    if plain.version != CURRENT_VERSION {
-        return Err(invalid_store());
-    }
     Ok(plain.secrets)
 }
 
 fn decrypt_store(raw: &[u8], key: &[u8; 32]) -> Result<HashMap<String, String>> {
     let enc: EncryptedSecrets = serde_json::from_slice(raw).map_err(|_| invalid_store())?;
-    if enc.version != CURRENT_VERSION {
-        return Err(invalid_store());
-    }
     let nonce: [u8; 12] = BASE64
         .decode(enc.nonce)
         .map_err(|_| invalid_store())?
@@ -139,7 +131,8 @@ impl FileSecretStore {
 
     fn load_store_locked(&self) -> Result<HashMap<String, String>> {
         match read_vault(&self.path)? {
-            Some(raw) => decrypt_store(&raw, &self.encryption_key),
+            Some(raw) if !raw.is_empty() => decrypt_store(&raw, &self.encryption_key),
+            Some(_) => Ok(HashMap::new()),
             None => Ok(HashMap::new()),
         }
     }
@@ -160,7 +153,7 @@ impl FileSecretStore {
             nonce: BASE64.encode(nonce),
             ciphertext: BASE64.encode(ciphertext),
         };
-        atomic_write(&self.path, &serde_json::to_vec_pretty(&enc)?)
+        write_vault(&self.path, &serde_json::to_vec_pretty(&enc)?)
     }
 }
 
@@ -175,6 +168,33 @@ fn restrict_file(file: &fs::File) -> io::Result<()> {
     Ok(())
 }
 
+/// Preserve the existing file identity, ownership, ACLs, links and file mounts.
+/// As before, existing-file updates are not crash-atomic. Serialize and encrypt
+/// completely before opening the destination; never fall back after a write fails.
+fn write_vault(path: &Path, ciphertext: &[u8]) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => {
+            // create follows dangling symlinks, matching the previous fs::write behavior.
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(path)
+                .map_err(|error| {
+                    Error::Secret(format!(
+                        "Cannot open WF_SECRET_FILE for writing; check file access: {error}"
+                    ))
+                })?;
+            file.write_all(ciphertext)?;
+            file.set_len(ciphertext.len() as u64)?;
+            file.sync_all()?;
+            Ok(())
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => atomic_write(path, ciphertext),
+        Err(error) => Err(error.into()),
+    }
+}
+
 /// The tempfile lives beside the vault so replacement stays on the same filesystem.
 /// Before replacement an error leaves the old file untouched. A directory-sync error
 /// after replacement means the new file is installed but its durability is uncertain.
@@ -183,14 +203,7 @@ fn atomic_write(path: &Path, ciphertext: &[u8]) -> Result<()> {
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    let mut builder = fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    builder.create(parent)?;
+    fs::create_dir_all(parent)?;
     // tempfile creates Unix files with mode 0600; existing directories are untouched.
     let mut temp_builder = tempfile::Builder::new();
     temp_builder.prefix(".wealthfolio-secrets-");
@@ -251,7 +264,7 @@ impl SecretStore for FileSecretStore {
     }
 }
 
-/// Validate at startup and migrate supported legacy formats using the atomic writer.
+/// Attempt legacy migration without making unrelated server features depend on vault health.
 /// Plaintext v1 is accepted only here for compatibility with early custom builds.
 pub fn build_secret_store(
     path: PathBuf,
@@ -259,31 +272,34 @@ pub fn build_secret_store(
     raw_key_for_migration: Option<&[u8]>,
 ) -> Result<FileSecretStore> {
     let store = FileSecretStore::new_from_bytes(path, derived_key);
-    let Some(raw) = read_vault(&store.path)? else {
-        return Ok(store);
+    let raw = match read_vault(&store.path) {
+        Ok(Some(raw)) if !raw.is_empty() => raw,
+        Ok(_) => return Ok(store),
+        Err(error) => {
+            tracing::warn!(
+                "Cannot read secret store; secret operations will report the error: {error}"
+            );
+            return Ok(store);
+        }
     };
     match decrypt_store(&raw, &derived_key) {
-        Ok(_) => {
-            let mut options = fs::OpenOptions::new();
-            options.read(true);
-            #[cfg(windows)]
-            {
-                use std::os::windows::fs::OpenOptionsExt;
-                use windows_sys::Win32::{
-                    Foundation::GENERIC_READ, Storage::FileSystem::WRITE_DAC,
-                };
-                options.access_mode(GENERIC_READ | WRITE_DAC);
-            }
-            restrict_file(&options.open(&store.path)?)?;
-            Ok(store)
-        }
+        Ok(_) => Ok(store),
         Err(original_error) => {
             let legacy = raw_key_for_migration
                 .and_then(|key| <&[u8; 32]>::try_from(key).ok())
                 .and_then(|key| decrypt_store(&raw, key).ok())
-                .or_else(|| decode_plain(&raw).ok());
+                .or_else(|| {
+                    // An encrypted envelope must never fall back to plaintext, even
+                    // if it also contains a secrets field.
+                    let value: serde_json::Value = serde_json::from_slice(&raw).ok()?;
+                    if value.get("ciphertext").is_some() {
+                        return None;
+                    }
+                    decode_plain(&raw).ok()
+                });
             let Some(secrets) = legacy else {
-                return Err(original_error);
+                tracing::warn!("Cannot decrypt secret store; secret operations will report the error: {original_error}");
+                return Ok(store);
             };
             store.persist_migrated(&secrets)?;
             tracing::info!("Migrated legacy secrets file to derived-key encryption");

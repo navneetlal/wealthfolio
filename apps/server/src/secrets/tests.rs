@@ -62,14 +62,6 @@ fn current_encrypted_v1_loads_without_rewriting() {
     let fixture = encrypted_fixture(&KEY, &legacy_payload());
     fs::write(&path, &fixture).unwrap();
     let store = build_secret_store(path.clone(), KEY, Some(&[8; 32])).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        assert_eq!(
-            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
-    }
     assert_eq!(
         store.get_secret("fixture").unwrap().as_deref(),
         Some("fixture-token")
@@ -110,13 +102,10 @@ fn legacy_raw_key_and_plaintext_migrate_once_without_losing_entries() {
 fn malformed_or_wrong_key_files_fail_without_panics_or_replacement() {
     let valid = encrypted_fixture(&KEY, &legacy_payload());
     let mut cases = vec![
-        vec![],
         b"{".to_vec(),
         b"null".to_vec(),
         b"{}".to_vec(),
         encrypted_fixture(&[99; 32], &legacy_payload()),
-        br#"{"version":2,"secrets":{}}"#.to_vec(),
-        encrypted_fixture(&KEY, br#"{"version":2,"secrets":{}}"#),
         encrypted_fixture(&KEY, b"not json"),
     ];
     for size in [0, 1, 11, 13, 32] {
@@ -128,7 +117,6 @@ fn malformed_or_wrong_key_files_fail_without_panics_or_replacement() {
         ("nonce", serde_json::json!("!invalid!")),
         ("ciphertext", serde_json::json!("!invalid!")),
         ("ciphertext", serde_json::json!("")),
-        ("version", serde_json::json!(2)),
     ] {
         let mut envelope: serde_json::Value = serde_json::from_slice(&valid).unwrap();
         envelope[field] = value;
@@ -140,7 +128,7 @@ fn malformed_or_wrong_key_files_fail_without_panics_or_replacement() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("secrets.json");
         fs::write(&path, &raw).unwrap();
-        assert!(build_secret_store(path.clone(), KEY, Some(&[8; 32])).is_err());
+        assert!(build_secret_store(path.clone(), KEY, Some(&[8; 32])).is_ok());
         let store = FileSecretStore::new_from_bytes(path.clone(), KEY);
         assert!(store.get_secret("fixture").is_err());
         assert!(store.set_secret("new", "value").is_err());
@@ -152,7 +140,8 @@ fn malformed_or_wrong_key_files_fail_without_panics_or_replacement() {
 #[test]
 fn unreadable_path_is_not_a_new_vault() {
     let dir = tempdir().unwrap();
-    assert!(build_secret_store(dir.path().to_path_buf(), KEY, None).is_err());
+    let store = build_secret_store(dir.path().to_path_buf(), KEY, None).unwrap();
+    assert!(store.get_secret("fixture").is_err());
 }
 
 #[test]
@@ -201,7 +190,7 @@ fn debug_does_not_include_key() {
 
 #[cfg(unix)]
 #[test]
-fn owner_only_files_and_new_directories_preserve_existing_directory_mode() {
+fn new_files_are_private_and_existing_permissions_are_preserved() {
     use std::os::unix::fs::PermissionsExt;
     let dir = tempdir().unwrap();
     fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).unwrap();
@@ -213,14 +202,6 @@ fn owner_only_files_and_new_directories_preserve_existing_directory_mode() {
         0o755
     );
     assert_eq!(
-        fs::metadata(path.parent().unwrap())
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o777,
-        0o700
-    );
-    assert_eq!(
         fs::metadata(&path).unwrap().permissions().mode() & 0o777,
         0o600
     );
@@ -228,7 +209,7 @@ fn owner_only_files_and_new_directories_preserve_existing_directory_mode() {
     store.set_secret("b", "fixture").unwrap();
     assert_eq!(
         fs::metadata(path).unwrap().permissions().mode() & 0o777,
-        0o600
+        0o644
     );
 }
 
@@ -241,6 +222,7 @@ fn failed_write_preserves_existing_vault() {
     let store = FileSecretStore::new_from_bytes(path.clone(), KEY);
     store.set_secret("original", "fixture").unwrap();
     let original = fs::read(&path).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o400)).unwrap();
     fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o500)).unwrap();
     let result = store.set_secret("new", "fixture");
     fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
@@ -291,6 +273,136 @@ fn encrypted_credentials_survive_process_restart() {
             "Fixture process failed: {} {}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+fn empty_existing_vault_and_extended_format_remain_compatible() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("vault");
+    fs::write(&path, []).unwrap();
+    let store = build_secret_store(path.clone(), KEY, None).unwrap();
+    assert_eq!(store.get_secret("fixture").unwrap(), None);
+    store.set_secret("fixture", "value").unwrap();
+    let mut envelope: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    envelope["extension"] = true.into();
+    fs::write(&path, serde_json::to_vec(&envelope).unwrap()).unwrap();
+    assert_eq!(
+        store.get_secret("fixture").unwrap().as_deref(),
+        Some("value")
+    );
+}
+
+#[test]
+fn existing_file_updates_preserve_hard_links() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("vault");
+    let alias = dir.path().join("alias");
+    let store = build_secret_store(path.clone(), KEY, None).unwrap();
+    store.set_secret("fixture", "long original value").unwrap();
+    fs::hard_link(&path, &alias).unwrap();
+    store.set_secret("fixture", "short").unwrap();
+    let linked = build_secret_store(alias, KEY, None).unwrap();
+    assert_eq!(
+        linked.get_secret("fixture").unwrap().as_deref(),
+        Some("short")
+    );
+    linked.delete_secret("fixture").unwrap();
+    assert_eq!(store.get_secret("fixture").unwrap(), None);
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinks_preserve_targets_for_updates_and_migration() {
+    use std::os::unix::fs::symlink;
+    for raw in [
+        encrypted_fixture(&KEY, &legacy_payload()),
+        encrypted_fixture(&[8; 32], &legacy_payload()),
+        legacy_payload(),
+        vec![],
+    ] {
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("target");
+        let link = dir.path().join("vault");
+        fs::write(&target, raw).unwrap();
+        symlink("target", &link).unwrap();
+        let store = build_secret_store(link.clone(), KEY, Some(&[8; 32])).unwrap();
+        store.set_secret("fixture", "updated").unwrap();
+        assert!(fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        let target_store = build_secret_store(target, KEY, None).unwrap();
+        assert_eq!(
+            target_store.get_secret("fixture").unwrap().as_deref(),
+            Some("updated")
+        );
+        store.delete_secret("fixture").unwrap();
+        assert_eq!(target_store.get_secret("fixture").unwrap(), None);
+    }
+    let dir = tempdir().unwrap();
+    let link = dir.path().join("dangling");
+    symlink("new-target", &link).unwrap();
+    let store = build_secret_store(link.clone(), KEY, None).unwrap();
+    store.set_secret("fixture", "value").unwrap();
+    assert!(fs::symlink_metadata(link).unwrap().file_type().is_symlink());
+    assert!(dir.path().join("new-target").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn writable_vault_in_unwritable_parent_remains_supported() {
+    use std::os::unix::fs::PermissionsExt;
+    for raw in [
+        encrypted_fixture(&KEY, &legacy_payload()),
+        encrypted_fixture(&[8; 32], &legacy_payload()),
+        legacy_payload(),
+    ] {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("vault");
+        fs::write(&path, raw).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o660)).unwrap();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o500)).unwrap();
+        let store = build_secret_store(path.clone(), KEY, Some(&[8; 32])).unwrap();
+        store.set_secret("fixture", "updated").unwrap();
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o660
+        );
+        store.delete_secret("fixture").unwrap();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    }
+}
+
+// Native Linux CI supplies a root-owned writable file and a file bind mount.
+#[cfg(unix)]
+#[test]
+fn deployment_file_fixture() {
+    use std::os::unix::fs::MetadataExt;
+    let Some(path) = std::env::var_os("WF_VAULT_DEPLOYMENT_FIXTURE") else {
+        return;
+    };
+    let path = PathBuf::from(path);
+    let before = fs::metadata(&path).unwrap();
+    for raw in [
+        encrypted_fixture(&KEY, &legacy_payload()),
+        encrypted_fixture(&[8; 32], &legacy_payload()),
+        legacy_payload(),
+    ] {
+        fs::write(&path, raw).unwrap();
+        let store = build_secret_store(path.clone(), KEY, Some(&[8; 32])).unwrap();
+        store.set_secret("fixture", "updated").unwrap();
+        assert_eq!(
+            store.get_secret("fixture").unwrap().as_deref(),
+            Some("updated")
+        );
+        store.delete_secret("fixture").unwrap();
+        let after = fs::metadata(&path).unwrap();
+        assert_eq!(
+            (before.ino(), before.uid(), before.gid(), before.mode()),
+            (after.ino(), after.uid(), after.gid(), after.mode())
         );
     }
 }

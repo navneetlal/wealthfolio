@@ -80,13 +80,24 @@ mod tests {
     fn persisted_vault_has_only_owner_and_system_access() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("secrets.json");
-        // Replacing an existing, inherited-permissions file must retain the new ACL.
-        std::fs::write(&path, b"old ciphertext").unwrap();
         super::super::atomic_write(&path, b"new ciphertext").unwrap();
         let file = File::open(path).unwrap();
-        // SAFETY: Windows allocates both buffers, which remain valid until copied
-        // and are freed before assertions. The file handle is live throughout.
-        let sddl = unsafe {
+        let sddl = read_dacl(&file);
+        // Windows may retain the auto-inherited descriptor metadata (AI), even
+        // though P disables future inheritance and neither ACE is inherited.
+        // Some versions also include an extra NUL in the returned buffer length.
+        let (flags, entries) = sddl.trim_end_matches('\0').split_once('(').unwrap();
+        assert!(matches!(flags, "D:P" | "D:PAI"), "Unprotected DACL: {sddl}");
+        // Require exactly owner and SYSTEM full-access ACEs, with no inherited ACEs.
+        assert!(
+            entries == "A;;FA;;;OW)(A;;FA;;;SY)" || entries == "A;;FA;;;SY)(A;;FA;;;OW)",
+            "Unexpected vault DACL entries: {sddl}"
+        );
+    }
+
+    fn read_dacl(file: &File) -> String {
+        // SAFETY: the live file handle is valid; Windows-allocated buffers are freed.
+        unsafe {
             let mut descriptor = null_mut();
             assert_eq!(
                 GetSecurityInfo(
@@ -116,16 +127,16 @@ mod tests {
                 String::from_utf16_lossy(std::slice::from_raw_parts(output, length as usize - 1));
             LocalFree(output.cast());
             sddl
-        };
-        // Windows may retain the auto-inherited descriptor metadata (AI), even
-        // though P disables future inheritance and neither ACE is inherited.
-        // Some versions also include an extra NUL in the returned buffer length.
-        let (flags, entries) = sddl.trim_end_matches('\0').split_once('(').unwrap();
-        assert!(matches!(flags, "D:P" | "D:PAI"), "Unprotected DACL: {sddl}");
-        // Require exactly owner and SYSTEM full-access ACEs, with no inherited ACEs.
-        assert!(
-            entries == "A;;FA;;;OW)(A;;FA;;;SY)" || entries == "A;;FA;;;SY)(A;;FA;;;OW)",
-            "Unexpected vault DACL entries: {sddl}"
-        );
+        }
+    }
+
+    #[test]
+    fn existing_vault_dacl_is_preserved() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault");
+        std::fs::write(&path, b"old ciphertext").unwrap();
+        let before = read_dacl(&File::open(&path).unwrap());
+        super::super::write_vault(&path, b"new ciphertext").unwrap();
+        assert_eq!(read_dacl(&File::open(&path).unwrap()), before);
     }
 }
