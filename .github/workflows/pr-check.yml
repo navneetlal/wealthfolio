@@ -39,6 +39,22 @@ jobs:
           git diff --no-renames --name-only -z "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed-files"
           python3 .github/scripts/ci_changes.py < "$RUNNER_TEMP/changed-files" >> "$GITHUB_OUTPUT"
 
+  translation-parity:
+    name: Translation parity
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Test translation checker
+        run: node --test apps/frontend/scripts/check-translations.test.mjs
+      - name: Check every language and namespace
+        run: node apps/frontend/scripts/check-translations.mjs
+
   formatting:
     name: Formatting
     needs: changes
@@ -199,7 +215,7 @@ jobs:
     name: Build Status
     timeout-minutes: 5
     runs-on: ubuntu-latest
-    needs: [changes, formatting, frontend-check, rust-check, android-build]
+    needs: [changes, formatting, translation-parity, frontend-check, rust-check, android-build]
     if: always()
 
     steps:
@@ -212,12 +228,14 @@ jobs:
           ANDROID_RESULT: ${{ needs.android-build.result }}
           FRONTEND_REQUIRED: ${{ needs.changes.outputs.frontend }}
           RUST_REQUIRED: ${{ needs.changes.outputs.rust }}
+          TRANSLATION_RESULT: ${{ needs.translation-parity.result }}
           FRONTEND_RESULT: ${{ needs.frontend-check.result }}
           RUST_RESULT: ${{ needs.rust-check.result }}
         run: |
           test "$CHANGES_RESULT" = success
           if [ "$FRONTEND_REQUIRED" = true ]; then
             test "$FRONTEND_RESULT" = success
+            test "$TRANSLATION_RESULT" = success
           fi
           if [ "$RUST_REQUIRED" = true ]; then
             test "$RUST_RESULT" = success
