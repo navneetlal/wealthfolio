@@ -9023,7 +9023,6 @@ dependencies = [
  "wealthfolio-mcp",
  "wealthfolio-spending",
  "wealthfolio-storage-sqlite",
- "windows-sys 0.61.2",
 ]
 
 [[package]]
