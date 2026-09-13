@@ -83,6 +83,9 @@ fn legacy_raw_key_and_plaintext_migrate_once_without_losing_entries() {
             store.get_secret("fixture").unwrap().as_deref(),
             Some("fixture-token")
         );
+        // Plaintext remains readable without requiring startup write access.
+        // Its next successful update encrypts it, matching existing deployments.
+        store.set_secret("fixture", "fixture-token").unwrap();
         let migrated = fs::read(&path).unwrap();
         assert!(decrypt_store(&migrated, &KEY).is_ok());
         assert!(decrypt_store(&migrated, &[8; 32]).is_err());
@@ -404,5 +407,26 @@ fn deployment_file_fixture() {
             (before.ino(), before.uid(), before.gid(), before.mode()),
             (after.ino(), after.uid(), after.gid(), after.mode())
         );
+    }
+}
+
+#[test]
+fn read_only_vaults_start_without_permission_changes() {
+    for raw in [encrypted_fixture(&KEY, &legacy_payload()), legacy_payload()] {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("vault");
+        fs::write(&path, &raw).unwrap();
+        let original_permissions = fs::metadata(&path).unwrap().permissions();
+        let mut read_only = original_permissions.clone();
+        read_only.set_readonly(true);
+        fs::set_permissions(&path, read_only).unwrap();
+        let store = build_secret_store(path.clone(), KEY, Some(&[8; 32])).unwrap();
+        assert_eq!(
+            store.get_secret("fixture").unwrap().as_deref(),
+            Some("fixture-token")
+        );
+        assert_eq!(fs::read(&path).unwrap(), raw);
+        assert!(fs::metadata(&path).unwrap().permissions().readonly());
+        fs::set_permissions(&path, original_permissions).unwrap();
     }
 }

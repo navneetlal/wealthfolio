@@ -72,6 +72,16 @@ fn decode_plain(raw: &[u8]) -> Result<HashMap<String, String>> {
     Ok(plain.secrets)
 }
 
+// Legacy plaintext is readable for compatibility; every subsequent write encrypts it.
+fn read_store_contents(raw: &[u8], key: &[u8; 32]) -> Result<HashMap<String, String>> {
+    let value: serde_json::Value = serde_json::from_slice(raw).map_err(|_| invalid_store())?;
+    if value.get("ciphertext").is_some() {
+        decrypt_store(raw, key)
+    } else {
+        decode_plain(raw)
+    }
+}
+
 fn decrypt_store(raw: &[u8], key: &[u8; 32]) -> Result<HashMap<String, String>> {
     let enc: EncryptedSecrets = serde_json::from_slice(raw).map_err(|_| invalid_store())?;
     let nonce: [u8; 12] = BASE64
@@ -131,7 +141,7 @@ impl FileSecretStore {
 
     fn load_store_locked(&self) -> Result<HashMap<String, String>> {
         match read_vault(&self.path)? {
-            Some(raw) if !raw.is_empty() => decrypt_store(&raw, &self.encryption_key),
+            Some(raw) if !raw.is_empty() => read_store_contents(&raw, &self.encryption_key),
             Some(_) => Ok(HashMap::new()),
             None => Ok(HashMap::new()),
         }
@@ -265,7 +275,7 @@ impl SecretStore for FileSecretStore {
 }
 
 /// Attempt legacy migration without making unrelated server features depend on vault health.
-/// Plaintext v1 is accepted only here for compatibility with early custom builds.
+/// Legacy plaintext remains readable and is encrypted on the next successful write.
 pub fn build_secret_store(
     path: PathBuf,
     derived_key: [u8; 32],
@@ -282,21 +292,12 @@ pub fn build_secret_store(
             return Ok(store);
         }
     };
-    match decrypt_store(&raw, &derived_key) {
+    match read_store_contents(&raw, &derived_key) {
         Ok(_) => Ok(store),
         Err(original_error) => {
             let legacy = raw_key_for_migration
                 .and_then(|key| <&[u8; 32]>::try_from(key).ok())
-                .and_then(|key| decrypt_store(&raw, key).ok())
-                .or_else(|| {
-                    // An encrypted envelope must never fall back to plaintext, even
-                    // if it also contains a secrets field.
-                    let value: serde_json::Value = serde_json::from_slice(&raw).ok()?;
-                    if value.get("ciphertext").is_some() {
-                        return None;
-                    }
-                    decode_plain(&raw).ok()
-                });
+                .and_then(|key| decrypt_store(&raw, key).ok());
             let Some(secrets) = legacy else {
                 tracing::warn!("Cannot decrypt secret store; secret operations will report the error: {original_error}");
                 return Ok(store);
