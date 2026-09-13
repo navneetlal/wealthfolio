@@ -288,7 +288,8 @@ fn encrypted_credentials_survive_process_restart() {
             .unwrap();
         assert!(
             output.status.success(),
-            "Fixture process failed: {}",
+            "Fixture process failed: {} {}",
+            String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
     }

@@ -192,9 +192,27 @@ fn atomic_write(path: &Path, ciphertext: &[u8]) -> Result<()> {
     }
     builder.create(parent)?;
     // tempfile creates Unix files with mode 0600; existing directories are untouched.
-    let mut temp = tempfile::Builder::new()
-        .prefix(".wealthfolio-secrets-")
-        .tempfile_in(parent)?;
+    let mut temp_builder = tempfile::Builder::new();
+    temp_builder.prefix(".wealthfolio-secrets-");
+    #[cfg(not(windows))]
+    let mut temp = temp_builder.tempfile_in(parent)?;
+    #[cfg(windows)]
+    let mut temp = {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::{
+            Foundation::{GENERIC_READ, GENERIC_WRITE},
+            Storage::FileSystem::WRITE_DAC,
+        };
+        // Request ACL rights on the original handle, before any ciphertext is written.
+        temp_builder.make_in(parent, |path| {
+            fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .access_mode(GENERIC_READ | GENERIC_WRITE | WRITE_DAC)
+                .create_new(true)
+                .open(path)
+        })?
+    };
     restrict_file(temp.as_file())?;
     temp.write_all(ciphertext)?;
     temp.as_file().sync_all()?;
@@ -246,7 +264,17 @@ pub fn build_secret_store(
     };
     match decrypt_store(&raw, &derived_key) {
         Ok(_) => {
-            restrict_file(&fs::File::open(&store.path)?)?;
+            let mut options = fs::OpenOptions::new();
+            options.read(true);
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::OpenOptionsExt;
+                use windows_sys::Win32::{
+                    Foundation::GENERIC_READ, Storage::FileSystem::WRITE_DAC,
+                };
+                options.access_mode(GENERIC_READ | WRITE_DAC);
+            }
+            restrict_file(&options.open(&store.path)?)?;
             Ok(store)
         }
         Err(original_error) => {
