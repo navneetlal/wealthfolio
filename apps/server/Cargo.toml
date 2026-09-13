@@ -59,6 +59,7 @@ semver = "1"
 openidconnect = { version = "4", default-features = false, features = ["reqwest", "rustls-tls"] }
 rmcp = { workspace = true }
 subtle = "2"
+tempfile = "3"
 
 [features]
 default = ["connect-sync", "device-sync"]
@@ -67,4 +68,6 @@ device-sync = []
 
 [dev-dependencies]
 reqwest = { workspace = true }
-tempfile = "3"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Security_Authorization", "Win32_Storage_FileSystem"] }

@@ -1,66 +1,114 @@
-use std::{collections::HashMap, fs, path::PathBuf, sync::Mutex};
+use std::{
+    collections::HashMap,
+    fmt, fs,
+    io::{self, Write},
+    path::{Path, PathBuf},
+    sync::Mutex,
+};
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use chacha20poly1305::{
     aead::{Aead, KeyInit},
-    ChaCha20Poly1305, Key, Nonce,
+    ChaCha20Poly1305, Nonce,
 };
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
-
 use wealthfolio_core::{
     errors::Error,
     secrets::{format_service_id, SecretStore},
     Result,
 };
 
+#[cfg(windows)]
+mod windows;
+
 const CURRENT_VERSION: u32 = 1;
 
-#[derive(Debug)]
+/// One server process owns a vault. The mutex serializes operations through this instance;
+/// independent instances/processes must not share the same file.
 pub struct FileSecretStore {
     path: PathBuf,
-    encryption_key: Option<[u8; 32]>,
+    encryption_key: [u8; 32],
     lock: Mutex<()>,
 }
 
-#[derive(Serialize, Deserialize, Default)]
+impl fmt::Debug for FileSecretStore {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FileSecretStore")
+            .field("path", &self.path)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PlainSecrets {
     version: u32,
     secrets: HashMap<String, String>,
 }
 
 #[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct EncryptedSecrets {
     version: u32,
     nonce: String,
     ciphertext: String,
 }
 
-impl FileSecretStore {
-    #[cfg(test)]
-    pub fn new(path: PathBuf, encryption_key: Option<&str>) -> Result<Self> {
-        let key = match encryption_key {
-            Some(value) if !value.trim().is_empty() => Some(decode_encryption_key(value)?),
-            _ => None,
-        };
+fn invalid_store() -> Error {
+    Error::Secret(
+        "Invalid or unsupported secrets file; preserve the file and restore a valid backup".into(),
+    )
+}
 
-        Ok(Self {
-            path,
-            encryption_key: key,
-            lock: Mutex::new(()),
-        })
+fn read_vault(path: &Path) -> Result<Option<Vec<u8>>> {
+    match fs::read(path) {
+        Ok(raw) => Ok(Some(raw)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
     }
+}
 
-    pub fn new_from_bytes(path: PathBuf, encryption_key: Option<[u8; 32]>) -> Result<Self> {
-        Ok(Self {
+fn decode_plain(raw: &[u8]) -> Result<HashMap<String, String>> {
+    let plain: PlainSecrets = serde_json::from_slice(raw).map_err(|_| invalid_store())?;
+    if plain.version != CURRENT_VERSION {
+        return Err(invalid_store());
+    }
+    Ok(plain.secrets)
+}
+
+fn decrypt_store(raw: &[u8], key: &[u8; 32]) -> Result<HashMap<String, String>> {
+    let enc: EncryptedSecrets = serde_json::from_slice(raw).map_err(|_| invalid_store())?;
+    if enc.version != CURRENT_VERSION {
+        return Err(invalid_store());
+    }
+    let nonce: [u8; 12] = BASE64
+        .decode(enc.nonce)
+        .map_err(|_| invalid_store())?
+        .try_into()
+        .map_err(|_| invalid_store())?;
+    let ciphertext = BASE64.decode(enc.ciphertext).map_err(|_| invalid_store())?;
+    let plaintext = ChaCha20Poly1305::new(key.into())
+        .decrypt(&Nonce::from(nonce), ciphertext.as_ref())
+        .map_err(|_| {
+            Error::Secret(
+                "Cannot decrypt secrets file; verify WF_SECRET_KEY or restore a matching backup"
+                    .into(),
+            )
+        })?;
+    decode_plain(&plaintext)
+}
+
+impl FileSecretStore {
+    pub fn new_from_bytes(path: PathBuf, encryption_key: [u8; 32]) -> Self {
+        Self {
             path,
             encryption_key,
             lock: Mutex::new(()),
-        })
+        }
     }
 
-    /// Re-encrypt and persist a set of secrets (used during key migration).
-    pub fn persist_migrated(&self, secrets: &HashMap<String, String>) -> Result<()> {
+    fn persist_migrated(&self, secrets: &HashMap<String, String>) -> Result<()> {
         let _guard = self
             .lock
             .lock()
@@ -89,77 +137,76 @@ impl FileSecretStore {
         self.load_store_locked()
     }
 
-    #[allow(deprecated)]
     fn load_store_locked(&self) -> Result<HashMap<String, String>> {
-        if !self.path.exists() {
-            return Ok(HashMap::new());
-        }
-
-        let raw = fs::read(&self.path)?;
-        if raw.is_empty() {
-            return Ok(HashMap::new());
-        }
-
-        let value: serde_json::Value = serde_json::from_slice(&raw)?;
-
-        if value.get("ciphertext").is_some() {
-            let key = self.encryption_key.ok_or_else(|| {
-                Error::Secret("WF_SECRET_KEY must be set to decrypt the secrets file".into())
-            })?;
-            let enc: EncryptedSecrets = serde_json::from_value(value)?;
-            let nonce_bytes = BASE64
-                .decode(enc.nonce)
-                .map_err(|e| Error::Secret(format!("Failed to decode nonce: {e}")))?;
-            let cipher_bytes = BASE64
-                .decode(enc.ciphertext)
-                .map_err(|e| Error::Secret(format!("Failed to decode ciphertext: {e}")))?;
-
-            let cipher = ChaCha20Poly1305::new(Key::from_slice(&key));
-            let nonce = Nonce::from_slice(&nonce_bytes);
-            let plaintext = cipher
-                .decrypt(nonce, cipher_bytes.as_ref())
-                .map_err(|_| Error::Secret("Failed to decrypt secrets file".into()))?;
-            let plain: PlainSecrets = serde_json::from_slice(&plaintext)?;
-            Ok(plain.secrets)
-        } else {
-            let plain: PlainSecrets = serde_json::from_value(value)?;
-            Ok(plain.secrets)
+        match read_vault(&self.path)? {
+            Some(raw) => decrypt_store(&raw, &self.encryption_key),
+            None => Ok(HashMap::new()),
         }
     }
 
-    #[allow(deprecated)]
     fn persist_store_locked(&self, store: &HashMap<String, String>) -> Result<()> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-
         let plain = PlainSecrets {
             version: CURRENT_VERSION,
             secrets: store.clone(),
         };
-
-        if let Some(key) = self.encryption_key {
-            let serialized = serde_json::to_vec(&plain)?;
-            let mut nonce_bytes = [0u8; 12];
-            OsRng.fill_bytes(&mut nonce_bytes);
-            let cipher = ChaCha20Poly1305::new(Key::from_slice(&key));
-            let nonce = Nonce::from_slice(&nonce_bytes);
-            let ciphertext = cipher
-                .encrypt(nonce, serialized.as_ref())
-                .map_err(|_| Error::Secret("Failed to encrypt secrets".into()))?;
-            let enc = EncryptedSecrets {
-                version: CURRENT_VERSION,
-                nonce: BASE64.encode(nonce_bytes),
-                ciphertext: BASE64.encode(ciphertext),
-            };
-            let json = serde_json::to_string_pretty(&enc)?;
-            fs::write(&self.path, json)?;
-        } else {
-            let json = serde_json::to_string_pretty(&plain)?;
-            fs::write(&self.path, json)?;
-        }
-        Ok(())
+        let serialized = serde_json::to_vec(&plain)?;
+        let mut nonce = [0u8; 12];
+        OsRng.fill_bytes(&mut nonce);
+        let ciphertext = ChaCha20Poly1305::new((&self.encryption_key).into())
+            .encrypt(&Nonce::from(nonce), serialized.as_ref())
+            .map_err(|_| Error::Secret("Failed to encrypt secrets".into()))?;
+        let enc = EncryptedSecrets {
+            version: CURRENT_VERSION,
+            nonce: BASE64.encode(nonce),
+            ciphertext: BASE64.encode(ciphertext),
+        };
+        atomic_write(&self.path, &serde_json::to_vec_pretty(&enc)?)
     }
+}
+
+fn restrict_file(file: &fs::File) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    }
+    #[cfg(windows)]
+    windows::restrict_file(file)?;
+    Ok(())
+}
+
+/// The tempfile lives beside the vault so replacement stays on the same filesystem.
+/// Before replacement an error leaves the old file untouched. A directory-sync error
+/// after replacement means the new file is installed but its durability is uncertain.
+fn atomic_write(path: &Path, ciphertext: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(parent)?;
+    // tempfile creates Unix files with mode 0600; existing directories are untouched.
+    let mut temp = tempfile::Builder::new()
+        .prefix(".wealthfolio-secrets-")
+        .tempfile_in(parent)?;
+    restrict_file(temp.as_file())?;
+    temp.write_all(ciphertext)?;
+    temp.as_file().sync_all()?;
+    temp.persist(path)
+        .map_err(|error| Error::from(error.error))?;
+    #[cfg(unix)]
+    fs::File::open(parent)?.sync_all().map_err(|_| {
+        Error::Secret(
+            "Secrets file replaced, but directory sync failed; durability is uncertain".into(),
+        )
+    })?;
+    Ok(())
 }
 
 impl SecretStore for FileSecretStore {
@@ -186,105 +233,36 @@ impl SecretStore for FileSecretStore {
     }
 }
 
-/// Build a secret store with a derived encryption key, migrating from the old raw key if needed.
+/// Validate at startup and migrate supported legacy formats using the atomic writer.
+/// Plaintext v1 is accepted only here for compatibility with early custom builds.
 pub fn build_secret_store(
     path: PathBuf,
-    derived_key: Option<[u8; 32]>,
+    derived_key: [u8; 32],
     raw_key_for_migration: Option<&[u8]>,
 ) -> Result<FileSecretStore> {
-    if let (Some(new_key), Some(old_raw)) = (derived_key, raw_key_for_migration) {
-        // Try loading with the new derived key first
-        let store = FileSecretStore::new_from_bytes(path.clone(), Some(new_key))?;
-        if path.exists() {
-            match store.read_store() {
-                Ok(_) => return Ok(store),
-                Err(_) => {
-                    // Derived key failed — try the old raw key to migrate
-                    let mut old_key = [0u8; 32];
-                    if old_raw.len() == 32 {
-                        old_key.copy_from_slice(old_raw);
-                    } else {
-                        // Can't migrate, just return the new store (will fail on decrypt)
-                        return Ok(store);
-                    }
-                    let old_store = FileSecretStore::new_from_bytes(path.clone(), Some(old_key))?;
-                    match old_store.read_store() {
-                        Ok(secrets) => {
-                            // Re-encrypt with derived key
-                            tracing::info!("Migrating secrets file to derived encryption key");
-                            let new_store = FileSecretStore::new_from_bytes(path, Some(new_key))?;
-                            new_store.persist_migrated(&secrets)?;
-                            return Ok(new_store);
-                        }
-                        Err(_) => {
-                            // Neither key works — return the new store
-                            return Ok(store);
-                        }
-                    }
-                }
-            }
-        }
-        Ok(store)
-    } else {
-        FileSecretStore::new_from_bytes(path, derived_key)
-    }
-}
-
-#[cfg(test)]
-fn decode_encryption_key(raw: &str) -> Result<[u8; 32]> {
-    let trimmed = raw.trim();
-    let decoded = match BASE64.decode(trimmed) {
-        Ok(bytes) => bytes,
-        Err(_) if trimmed.len() == 32 => trimmed.as_bytes().to_vec(),
-        Err(_) => {
-            return Err(Error::Secret(
-                "WF_SECRET_KEY must be a base64 string or 32-byte ascii value".into(),
-            ))
-        }
+    let store = FileSecretStore::new_from_bytes(path, derived_key);
+    let Some(raw) = read_vault(&store.path)? else {
+        return Ok(store);
     };
-
-    if decoded.len() != 32 {
-        return Err(Error::Secret(
-            "WF_SECRET_KEY must decode to exactly 32 bytes".into(),
-        ));
+    match decrypt_store(&raw, &derived_key) {
+        Ok(_) => {
+            restrict_file(&fs::File::open(&store.path)?)?;
+            Ok(store)
+        }
+        Err(original_error) => {
+            let legacy = raw_key_for_migration
+                .and_then(|key| <&[u8; 32]>::try_from(key).ok())
+                .and_then(|key| decrypt_store(&raw, key).ok())
+                .or_else(|| decode_plain(&raw).ok());
+            let Some(secrets) = legacy else {
+                return Err(original_error);
+            };
+            store.persist_migrated(&secrets)?;
+            tracing::info!("Migrated legacy secrets file to derived-key encryption");
+            Ok(store)
+        }
     }
-
-    let mut key = [0u8; 32];
-    key.copy_from_slice(&decoded);
-    Ok(key)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::tempdir;
-
-    #[test]
-    fn round_trip_without_encryption() {
-        let dir = tempdir().unwrap();
-        let file = dir.path().join("secrets.json");
-        let store = FileSecretStore::new(file.clone(), None).unwrap();
-
-        store.set_secret("alpha", "value").unwrap();
-        assert_eq!(store.get_secret("alpha").unwrap().as_deref(), Some("value"));
-
-        store.delete_secret("alpha").unwrap();
-        assert!(store.get_secret("alpha").unwrap().is_none());
-        assert!(file.exists());
-    }
-
-    #[test]
-    fn round_trip_with_encryption() {
-        let dir = tempdir().unwrap();
-        let file = dir.path().join("secrets.json");
-        let key = BASE64.encode([7u8; 32]);
-        let store = FileSecretStore::new(file.clone(), Some(&key)).unwrap();
-
-        store.set_secret("beta", "secret").unwrap();
-        assert_eq!(store.get_secret("beta").unwrap().as_deref(), Some("secret"));
-        assert!(file.exists());
-
-        let raw = fs::read_to_string(file).unwrap();
-        assert!(raw.contains("ciphertext"));
-    }
-}
+mod tests;
