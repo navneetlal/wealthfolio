@@ -117,10 +117,15 @@ mod tests {
             LocalFree(output.cast());
             sddl
         };
-        // Windows may canonicalize the order of these two allow entries.
+        // Windows may retain the auto-inherited descriptor metadata (AI), even
+        // though P disables future inheritance and neither ACE is inherited.
+        // Some versions also include an extra NUL in the returned buffer length.
+        let (flags, entries) = sddl.trim_end_matches('\0').split_once('(').unwrap();
+        assert!(matches!(flags, "D:P" | "D:PAI"), "Unprotected DACL: {sddl}");
+        // Require exactly owner and SYSTEM full-access ACEs, with no inherited ACEs.
         assert!(
-            sddl == "D:P(A;;FA;;;OW)(A;;FA;;;SY)" || sddl == "D:P(A;;FA;;;SY)(A;;FA;;;OW)",
-            "Unexpected vault DACL: {sddl}"
+            entries == "A;;FA;;;OW)(A;;FA;;;SY)" || entries == "A;;FA;;;SY)(A;;FA;;;OW)",
+            "Unexpected vault DACL entries: {sddl}"
         );
     }
 }
